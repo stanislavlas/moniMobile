@@ -1,21 +1,39 @@
-import * as Notifications from "expo-notifications";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const KEY_NOTIF_PREFS = "budget_notification_prefs";
 const NOTIF_IDENTIFIER = "budget_expense_reminder";
 
-// expo-notifications is not available in Expo Go (SDK 53+).
-// setNotificationHandler throws at module load in that environment, so guard it.
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
-  });
-} catch {
-  // Running in Expo Go — notifications not supported, silently skip.
+/**
+ * Lazily load expo-notifications. Returns null when running in Expo Go (SDK 53+)
+ * where the module is no longer bundled.
+ */
+function getNotifications() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require("expo-notifications");
+    // Verify the module is actually functional (not a stub)
+    if (typeof mod.setNotificationHandler !== "function") return null;
+    return mod;
+  } catch {
+    return null;
+  }
+}
+
+// Set up the notification handler once at startup if the module is available.
+const Notifications = getNotifications();
+if (Notifications) {
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      }),
+    });
+  } catch {
+    // Silently ignore — not available in this environment.
+  }
 }
 
 /**
@@ -24,6 +42,7 @@ try {
  * Returns false silently when running in Expo Go.
  */
 export async function requestNotificationPermission() {
+  if (!Notifications) return false;
   try {
     const { status } = await Notifications.requestPermissionsAsync();
     return status === "granted";
@@ -36,10 +55,12 @@ export async function requestNotificationPermission() {
  * Cancel all scheduled expense-reminder notifications.
  */
 export async function cancelNotifications() {
-  try {
-    await Notifications.cancelAllScheduledNotificationsAsync();
-  } catch {
-    // Not available in Expo Go.
+  if (Notifications) {
+    try {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+    } catch {
+      // Not available in Expo Go.
+    }
   }
   await AsyncStorage.removeItem(KEY_NOTIF_PREFS);
 }
@@ -56,26 +77,44 @@ function buildTrigger(time, frequency, customDays) {
   const [hour, minute] = time.split(":").map(Number);
 
   if (frequency === "daily") {
-    return { hour, minute, repeats: true };
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour,
+      minute,
+    };
   }
 
   if (frequency === "weekly") {
-    // Fire every 7 days — use seconds-based interval (7 days in seconds)
-    return { seconds: 7 * 24 * 60 * 60, repeats: true };
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: 7 * 24 * 60 * 60,
+      repeats: true,
+    };
   }
 
   if (frequency === "monthly") {
-    // Approximately 30 days
-    return { seconds: 30 * 24 * 60 * 60, repeats: true };
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: 30 * 24 * 60 * 60,
+      repeats: true,
+    };
   }
 
   if (frequency === "custom") {
     const days = Math.max(1, customDays || 1);
-    return { seconds: days * 24 * 60 * 60, repeats: true };
+    return {
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: days * 24 * 60 * 60,
+      repeats: true,
+    };
   }
 
   // Fallback — daily
-  return { hour, minute, repeats: true };
+  return {
+    type: Notifications.SchedulableTriggerInputTypes.DAILY,
+    hour,
+    minute,
+  };
 }
 
 /**
@@ -97,11 +136,12 @@ export async function applyNotificationPreferences(prefs) {
     notificationTime = "20:00",
   } = prefs || {};
 
+  // expo-notifications not available in Expo Go — bail out silently.
+  if (!Notifications) return;
+
   try {
-    // Cancel whatever was scheduled before
     await Notifications.cancelAllScheduledNotificationsAsync();
   } catch {
-    // Not available in Expo Go — bail out entirely.
     return;
   }
 
