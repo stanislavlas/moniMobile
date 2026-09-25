@@ -70,13 +70,14 @@ export function useAuth() {
 
   // Re-trigger biometric auto-login whenever the user is signed out (logout or session expiry)
   // but only after the initial rehydration is done (ready = true).
-  const prevUserRef = useRef(null);
+  // undefined = "effect hasn't run yet"; null/object = after first run
+  const prevUserRef = useRef(undefined);
   useEffect(() => {
     if (!ready) return;
-    const wasAuthenticated = prevUserRef.current !== null;
+    const prev = prevUserRef.current;
     prevUserRef.current = user;
-    if (wasAuthenticated && user === null) {
-      // User just signed out — offer biometric re-login
+    // Only trigger if user transitioned from non-null → null (sign-out), not on first render
+    if (prev !== undefined && prev !== null && user === null) {
       triggerBiometricLogin();
     }
   }, [user, ready, triggerBiometricLogin]);
