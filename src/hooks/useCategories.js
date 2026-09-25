@@ -6,6 +6,7 @@ import {
 } from "../services/customCategories.js";
 import { fromApiTransactionType } from "../utils/enums.js";
 import syncService from "../services/syncService.js";
+import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 import { logger } from "../utils/logger.js";
 
 const CACHE_KEY = "budget_custom_categories";
@@ -95,13 +96,9 @@ export function useCategories(isAuthenticated) {
     setAllCats(prev => { const n = prev.filter(c => c.categoryId !== categoryId); saveCache(n); return n; });
 
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("category.delete", { categoryId }, user?.userId);
-      svc.syncAll().catch(() => {});
+      await enqueueAndSync("category.delete", { categoryId });
     } catch (err) {
-      // Non-critical
+      logger.warn?.('categories', 'Failed to enqueue deleteCategory', err.message);
     }
   }, []);
 

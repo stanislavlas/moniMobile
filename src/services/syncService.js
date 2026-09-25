@@ -157,11 +157,11 @@ async function executeOperation(operation) {
   const { syncCreateCategory, syncDeleteCategory } = await import("./customCategories.js");
   const {
     syncCreateHousehold,
-    syncAddMember,
     syncRemoveMember,
     syncLeaveHousehold,
     syncDeleteHousehold,
     syncRenameHousehold,
+    syncSendInvitation,
   } = await import("./household.js");
 
   const { type, payload } = operation;
@@ -187,9 +187,6 @@ async function executeOperation(operation) {
       case "household.create":
         await syncCreateHousehold(payload.name);
         break;
-      case "household.addMember":
-        await syncAddMember(payload.email);
-        break;
       case "household.removeMember":
         await syncRemoveMember(payload.memberId);
         break;
@@ -198,6 +195,9 @@ async function executeOperation(operation) {
         break;
       case "household.leave":
         await syncLeaveHousehold();
+        break;
+      case "household.sendInvitation":
+        await syncSendInvitation(payload.email);
         break;
       case "household.delete":
         await syncDeleteHousehold();
@@ -323,7 +323,9 @@ export async function syncAll() {
     let errors = 0;
     const syncedOperations = [];
 
-    for (const op of pendingOps) {
+    for (let i = 0; i < pendingOps.length; i++) {
+      const op = pendingOps[i];
+
       if (!networkOnline) {
         logger.info('sync', 'Went offline mid-sync — stopping');
         break;
@@ -348,7 +350,7 @@ export async function syncAll() {
         logger.error('sync', `Operation ${op.id} threw unexpectedly`, err.message);
       }
 
-      if (pendingOps.indexOf(op) < pendingOps.length - 1) {
+      if (i < pendingOps.length - 1) {
         await new Promise(r => setTimeout(r, INTER_OP_DELAY));
       }
     }

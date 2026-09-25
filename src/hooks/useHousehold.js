@@ -1,49 +1,98 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getMyHousehold } from "../services/household.js";
+import { getMyHousehold, getPendingInvitations } from "../services/household.js";
+import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 import syncService from "../services/syncService.js";
 
-const CACHE_KEY = "budget_cache_household";
+const CACHE_KEY       = "budget_cache_household";
+const INVITATIONS_KEY = "budget_cache_pending_invitations";
 
-async function loadCache()  { try { return JSON.parse(await AsyncStorage.getItem(CACHE_KEY) || "null"); } catch { return null; } }
-async function saveCache(h) { try { if (h) await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(h)); else await AsyncStorage.removeItem(CACHE_KEY); } catch {} }
+async function loadCache(key)      { try { return JSON.parse(await AsyncStorage.getItem(key) || "null"); } catch { return null; } }
+async function saveCache(key, val) { try { if (val != null) await AsyncStorage.setItem(key, JSON.stringify(val)); else await AsyncStorage.removeItem(key); } catch {} }
 
 export async function clearHouseholdCache() {
-  try { await AsyncStorage.removeItem(CACHE_KEY); } catch {}
+  try { await Promise.all([AsyncStorage.removeItem(CACHE_KEY), AsyncStorage.removeItem(INVITATIONS_KEY)]); } catch {}
+}
+
+/** Lazy-loaded once — expo-notifications may be unavailable in Expo Go */
+let expoNotifications = null;
+async function getExpoNotifications() {
+  if (expoNotifications) return expoNotifications;
+  try {
+    expoNotifications = require("expo-notifications");
+    if (typeof expoNotifications.scheduleNotificationAsync !== "function") {
+      expoNotifications = null;
+    }
+  } catch {
+    expoNotifications = null;
+  }
+  return expoNotifications;
+}
+
+/** Fire a local push notification for each invitation not seen before. */
+async function notifyNewInvitations(newInvitations, seenIds) {
+  if (!newInvitations.length) return;
+  try {
+    const mod = await getExpoNotifications();
+    if (!mod) return;
+    for (const inv of newInvitations) {
+      if (seenIds.has(inv.invitationId)) continue;
+      await mod.scheduleNotificationAsync({
+        content: {
+          title: "Household invitation",
+          body: `${inv.invitedByName} invited you to join "${inv.householdName}"`,
+        },
+        trigger: null, // fire immediately
+      });
+    }
+  } catch {
+    // expo-notifications unavailable in Expo Go — ignore silently
+  }
 }
 
 export function useHousehold(isAuthenticated) {
-  const [household,   setHousehold]   = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [pendingSync, setPendingSync] = useState(false);
+  const [household,          setHousehold]  = useState(null);
+  const [pendingInvitations, setPending]    = useState([]);
+  const [loading,            setLoading]    = useState(true);
+  const [error,              setError]      = useState(null);
+  const [pendingSync,        setPendingSync] = useState(false);
 
-  // ── Read: cache + network in parallel ─────────────────────────────────────
+  // Track which invitation IDs have already triggered a notification this session
+  const notifiedIds = useRef(new Set());
+
   const fetch = useCallback(async () => {
     if (!isAuthenticated) {
-      setHousehold(null);
-      setLoading(false);
-      return;
+      setHousehold(null); setPending([]); setLoading(false); return;
     }
 
-    const cachePromise   = loadCache();
-    const networkPromise = getMyHousehold().catch(err => {
-      if (err.code === "AUTH_EXPIRED") throw err;
-      return null;
-    });
-
-    const cached = await cachePromise;
-    if (cached) setHousehold(cached);
+    // Seed UI from cache immediately
+    const [cachedHH, cachedInv] = await Promise.all([loadCache(CACHE_KEY), loadCache(INVITATIONS_KEY)]);
+    if (cachedHH)  setHousehold(cachedHH);
+    if (cachedInv) setPending(cachedInv);
     setLoading(false);
 
-    const data = await networkPromise;
-    if (data !== null) {
-      setHousehold(data);
-      saveCache(data);
+    try {
+      const [hh, invitations] = await Promise.all([
+        getMyHousehold().catch(err => { if (err.code === "AUTH_EXPIRED") throw err; return null; }),
+        getPendingInvitations().catch(() => []),
+      ]);
+      if (hh !== null) { setHousehold(hh); saveCache(CACHE_KEY, hh); }
+
+      // Notify for any invitations not yet seen this session
+      await notifyNewInvitations(invitations, notifiedIds.current);
+      invitations.forEach(i => notifiedIds.current.add(i.invitationId));
+
+      setPending(invitations);
+      saveCache(INVITATIONS_KEY, invitations);
+    } catch (err) {
+      if (err.code === "AUTH_EXPIRED") throw err;
+      // other errors: swallow — cached state is already shown
     }
   }, [isAuthenticated]);
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  // Re-poll when a household sync operation completes
   useEffect(() => {
     const handleSyncComplete = ({ syncedOperations = [] }) => {
       if (syncedOperations.some(op => op.type?.startsWith('household.'))) {
@@ -55,83 +104,117 @@ export function useHousehold(isAuthenticated) {
     return () => syncService.removeEventListener('syncComplete', handleSyncComplete);
   }, [fetch]);
 
-  // ── Writes: optimistic update + enqueue + background sync ─────────────────
   const createHousehold = useCallback(async (name) => {
+    const previous = household;
+    const previousCache = await loadCache(CACHE_KEY);
     const optimistic = { name, members: [], pendingSync: true };
-    setHousehold(optimistic); saveCache(optimistic); setPendingSync(true);
+    setHousehold(optimistic); saveCache(CACHE_KEY, optimistic); setPendingSync(true);
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("household.create", { name }, user?.userId);
-      svc.syncAll().catch(() => {});
-    } catch {}
+      await enqueueAndSync("household.create", { name });
+    } catch (err) {
+      // Roll back optimistic update
+      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
+      setPendingSync(false);
+      setError(err.message ?? "Failed to create household");
+      throw err;
+    }
+  }, [household]);
+
+  const sendInvitation = useCallback(async (email) => {
+    const { sendInvitation: svc } = await import("../services/household.js");
+    return svc(email);
   }, []);
 
-  const addMember = useCallback(async (email) => {
-    const { addMember: addMemberService } = await import("../services/household.js");
-    const result = await addMemberService(email);
-    if (result && !result.queued) {
-      setHousehold(result);
-      saveCache(result);
-    } else if (result?.queued) {
-      setPendingSync(true);
-    }
+  const acceptInvitation = useCallback(async (invitationId) => {
+    const { acceptInvitation: svc } = await import("../services/household.js");
+    const result = await svc(invitationId);
+    setPending(prev => prev.filter(i => i.invitationId !== invitationId));
+    await fetch(); // reload household now that we've joined
+    return result;
+  }, [fetch]);
+
+  const rejectInvitation = useCallback(async (invitationId) => {
+    const { rejectInvitation: svc } = await import("../services/household.js");
+    await svc(invitationId);
+    setPending(prev => prev.filter(i => i.invitationId !== invitationId));
+  }, []);
+
+  const cancelInvitation = useCallback(async (invitationId) => {
+    const { cancelInvitation: svc } = await import("../services/household.js");
+    return svc(invitationId);
   }, []);
 
   const removeMember = useCallback(async (memberId) => {
+    const previous = household;
+    const previousCache = await loadCache(CACHE_KEY);
     setHousehold(prev => {
       if (!prev) return prev;
       const updated = { ...prev, members: prev.members?.filter(m => m.userId !== memberId) || [], pendingSync: true };
-      saveCache(updated); return updated;
+      saveCache(CACHE_KEY, updated); return updated;
     });
     setPendingSync(true);
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("household.removeMember", { memberId }, user?.userId);
-      svc.syncAll().catch(() => {});
-    } catch {}
-  }, []);
+      await enqueueAndSync("household.removeMember", { memberId });
+    } catch (err) {
+      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
+      setPendingSync(false);
+      setError(err.message ?? "Failed to remove member");
+      throw err;
+    }
+  }, [household]);
 
   const leaveHousehold = useCallback(async () => {
-    setHousehold(null); saveCache(null); setPendingSync(true);
+    const previous = household;
+    const previousCache = await loadCache(CACHE_KEY);
+    setHousehold(null); saveCache(CACHE_KEY, null); setPendingSync(true);
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("household.leave", {}, user?.userId);
-      svc.syncAll().catch(() => {});
-    } catch {}
-  }, []);
+      await enqueueAndSync("household.leave", {});
+    } catch (err) {
+      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
+      setPendingSync(false);
+      setError(err.message ?? "Failed to leave household");
+      throw err;
+    }
+  }, [household]);
 
   const deleteHousehold = useCallback(async () => {
-    setHousehold(null); saveCache(null); setPendingSync(true);
+    const previous = household;
+    const previousCache = await loadCache(CACHE_KEY);
+    setHousehold(null); saveCache(CACHE_KEY, null); setPendingSync(true);
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("household.delete", {}, user?.userId);
-      svc.syncAll().catch(() => {});
-    } catch {}
-  }, []);
+      await enqueueAndSync("household.delete", {});
+    } catch (err) {
+      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
+      setPendingSync(false);
+      setError(err.message ?? "Failed to delete household");
+      throw err;
+    }
+  }, [household]);
 
   const renameHousehold = useCallback(async (name) => {
+    const previous = household;
+    const previousCache = await loadCache(CACHE_KEY);
     setHousehold(prev => {
       if (!prev) return prev;
       const updated = { ...prev, name, pendingSync: true };
-      saveCache(updated); return updated;
+      saveCache(CACHE_KEY, updated); return updated;
     });
     setPendingSync(true);
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("household.rename", { name }, user?.userId);
-      svc.syncAll().catch(() => {});
-    } catch {}
-  }, []);
+      await enqueueAndSync("household.rename", { name });
+    } catch (err) {
+      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
+      setPendingSync(false);
+      setError(err.message ?? "Failed to rename household");
+      throw err;
+    }
+  }, [household]);
 
-  return { household, loading, error: null, refresh: fetch, createHousehold, addMember, removeMember, leaveHousehold, deleteHousehold, renameHousehold, pendingSync };
+  return {
+    household, pendingInvitations,
+    pendingCount: pendingInvitations.length,
+    loading, error, refresh: fetch,
+    createHousehold, sendInvitation, acceptInvitation, rejectInvitation, cancelInvitation,
+    removeMember, leaveHousehold, deleteHousehold, renameHousehold, pendingSync,
+  };
 }

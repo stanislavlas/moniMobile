@@ -1,6 +1,7 @@
 import "react-native-gesture-handler";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useState, useEffect, useCallback } from "react";
-import { View, Text, TouchableOpacity, StatusBar, ActivityIndicator, ScrollView, Modal } from "react-native";
+import { View, Text, TouchableOpacity, StatusBar, ActivityIndicator, Modal } from "react-native";
 import { useAuth }         from "./src/hooks/useAuth.js";
 import { useEntries }      from "./src/hooks/useEntries.js";
 import { useHousehold }    from "./src/hooks/useHousehold.js";
@@ -15,23 +16,18 @@ import { MonthOverviewScreen } from "./app/screens/MonthOverviewScreen.jsx";
 import { YearOverviewScreen }  from "./app/screens/YearOverviewScreen.jsx";
 import { AddScreen }         from "./app/screens/AddScreen.jsx";
 import { AccountScreen }     from "./app/screens/AccountScreen.jsx";
-import { MONTH_LABELS }   from "./src/utils/theme.js";
+import { HistoryScreen }     from "./app/screens/HistoryScreen.jsx";
 import { authenticateWithBiometric } from "./src/services/biometric.js"; // used in biometric enroll modal
 import { applyNotificationPreferences } from "./src/services/notifications.js";
+import { AUTH_POLL_INTERVAL_MS } from "./src/utils/constants.js";
 
 const TABS = [
-  { id: "month",    label: "Month",    emoji: "📊" },
-  { id: "year",     label: "Year",     emoji: "📅" },
-  { id: "add",      label: "Add",      emoji: "➕" },
-  { id: "account",  label: "Account",  emoji: "👤" },
+  { id: "month",   label: "Month",   icon: "month" },
+  { id: "year",    label: "Year",    icon: "year" },
+  { id: "add",     label: "Add",     icon: "add" },
+  { id: "history", label: "History", icon: "history" },
+  { id: "account", label: "Account", icon: "account" },
 ];
-
-function buildMonths() {
-  return Array.from({ length: 36 }, (_, i) => {
-    const d = new Date(); d.setMonth(d.getMonth() - i);
-    return d.toISOString().slice(0, 7);
-  });
-}
 
 function AppContent() {
   const { isDark, colors: C, styles: S } = useTheme();
@@ -49,27 +45,25 @@ function AppContent() {
     }
   }, []);
 
-  // Debug: Log API URL on mount
-  useEffect(() => {
-    console.log('🔍 API_BASE_URL:', process.env.EXPO_PUBLIC_API_BASE_URL);
-  }, []);
-
   const auth = useAuth();
   const { user, isAuthenticated, ready, loading: authLoading, error: authError, clearError, login, register, logout, deleteAccount, changePassword, updateProfile, loginWithBiometric, pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll, pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification } = auth;
 
   // Handle session expiration globally
   useEffect(() => {
+    let logoutFired = false;
     const checkAuth = async () => {
+      if (logoutFired) return;
       const { getAccessToken, getRefreshToken } = await import("./src/services/auth.js");
       const [access, refresh] = await Promise.all([getAccessToken(), getRefreshToken()]);
       if (!access && !refresh && isAuthenticated) {
         // Tokens were cleared but user is still set - session expired
+        logoutFired = true;
         logout();
       }
     };
 
     if (isAuthenticated) {
-      const interval = setInterval(checkAuth, 5000); // Check every 5 seconds
+      const interval = setInterval(checkAuth, AUTH_POLL_INTERVAL_MS);
       return () => clearInterval(interval);
     }
   }, [isAuthenticated, logout]);
@@ -77,12 +71,17 @@ function AppContent() {
   const [tab, setTab]               = useState("month");
   const [accountKey, setAccountKey] = useState(0);
   const [filterMonth, setFilterMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [showPersonalOnly, setShowPersonalOnly] = useState(false); // Toggle for personal vs household view
-  const [openHouseholdAddMember, setOpenHouseholdAddMember] = useState(false); // Flag to open add member form
+
+  const {
+    household, pendingInvitations, pendingCount,
+    createHousehold, sendInvitation, acceptInvitation, rejectInvitation, cancelInvitation,
+    removeMember, leaveHousehold, deleteHousehold, renameHousehold,
+  } = useHousehold(isAuthenticated);
+  const householdId = household?.householdId || null;
 
   // Check if user is household owner
-  const isHouseholdOwner = household?.ownerUserId === user?.userId;
+  const isHouseholdOwner = household?.ownerId === user?.userId;
 
   // Reset to default tab on logout
   useEffect(() => {
@@ -91,10 +90,7 @@ function AppContent() {
     }
   }, [isAuthenticated]);
 
-  const { household, createHousehold, addMember, removeMember, leaveHousehold, deleteHousehold, renameHousehold } = useHousehold(isAuthenticated);
-  const householdId = household?.householdId || null;
-
-  const { currencyList } = useCurrencies();
+  const { currencyList, load: loadCurrencies } = useCurrencies();
 
   // Show household entries when user is in a household and hasn't toggled to personal
   const showHousehold = !!householdId && !showPersonalOnly;
@@ -150,12 +146,8 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <AuthScreen onLogin={login} onRegister={register} loading={authLoading} error={authError} onClearError={clearError} onBiometricLogin={loginWithBiometric} currencyList={currencyList} pendingRegistration={pendingRegistration} onVerifyRegistration={verifyRegistration} onResendRegistrationCode={resendRegistrationCode} onCancelRegistration={cancelRegistrationVerification} />;
+    return <AuthScreen onLogin={login} onRegister={register} loading={authLoading} error={authError} onClearError={clearError} onBiometricLogin={loginWithBiometric} currencyList={currencyList} onCurrencyPickerOpen={loadCurrencies} pendingRegistration={pendingRegistration} onVerifyRegistration={verifyRegistration} onResendRegistrationCode={resendRegistrationCode} onCancelRegistration={cancelRegistrationVerification} />;
   }
-
-  const d = new Date(filterMonth + "-01");
-  const monthLabel = `${MONTH_LABELS[d.getMonth()]} ${d.getFullYear()}`;
-  const months = buildMonths();
 
   // Category data passed down to all screens
   const catProps = { incomeCategories, expenseCategories, investmentCategories, allCategories, colorMap, getCategoryById };
@@ -209,98 +201,30 @@ function AppContent() {
         borderBottomWidth: 0.5,
         borderBottomColor: C.border,
       }}>
-        {/* Left side - Add Member button for household owners */}
-        <View>
-          {household && isHouseholdOwner && !showPersonalOnly && (
-            <TouchableOpacity
-              onPress={() => {
-                setTab("account");
-                setOpenHouseholdAddMember(true);
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                borderRadius: 8,
-                backgroundColor: C.greenLight,
-                borderWidth: 0.5,
-                borderColor: C.greenBorder,
-              }}
-            >
-              <Text style={{ fontSize: 16 }}>👥</Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: C.greenDark }}>Add Member</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+        {/* Left side - placeholder for layout balance */}
+        <View style={{ width: 36 }} />
 
-         {/* Right side - View toggle, sync indicator and loading indicator */}
+        {/* Right side - View toggle, sync indicator and loading indicator */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           {household && (
             <TouchableOpacity
               onPress={() => setShowPersonalOnly(!showPersonalOnly)}
               style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                paddingHorizontal: 12,
-                paddingVertical: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
                 borderRadius: 8,
                 borderWidth: 0.5,
                 borderColor: showPersonalOnly ? C.border : C.greenBorder,
-                backgroundColor: showPersonalOnly ? C.bgSecondary : C.greenLight,
+                backgroundColor: showPersonalOnly ? "transparent" : C.greenLight,
               }}
             >
-              <Text style={{ fontSize: 12, fontWeight: "600", color: showPersonalOnly ? C.text : C.greenDark }}>
-                {showPersonalOnly ? "👤 Personal" : `🏠 ${household.name}`}
-              </Text>
+              <Text style={{ fontSize: 16 }}>🏠</Text>
             </TouchableOpacity>
           )}
           <SyncIndicator />
           {entriesLoading && <ActivityIndicator color={C.green} size="small" />}
         </View>
       </View>
-
-      {/* Month picker - moved to dashboard */}
-      {showMonthPicker && tab === "month" && (
-        <View style={{
-          backgroundColor: C.cardBg,
-          borderBottomWidth: 0.5,
-          borderBottomColor: C.border,
-          maxHeight: 300,
-        }}>
-          <ScrollView>
-            {months.map(m => {
-              const md = new Date(m + "-01");
-  // Handle scroll to update active tab
-  const handleScroll = (event) => {
-    const contentOffsetX = event.nativeEvent.contentOffset.x;
-    const currentIndex = Math.round(contentOffsetX / SCREEN_WIDTH);
-    const newTab = TABS[currentIndex]?.id;
-    if (newTab && newTab !== tab) {
-      setTab(newTab);
-      if (newTab === "account") setAccountKey(k => k + 1);
-    }
-  };
-
-  return (
-                <TouchableOpacity key={m} style={[{
-                  paddingHorizontal: 20,
-                  paddingVertical: 12,
-                  borderBottomWidth: 0.5,
-                  borderBottomColor: C.border,
-                }, m === filterMonth && { backgroundColor: C.greenLight }]}
-                  onPress={() => { setFilterMonth(m); setShowMonthPicker(false); }}>
-                  <Text style={{ fontSize: 14, color: m === filterMonth ? C.greenDark : C.text, fontWeight: m === filterMonth ? "600" : "400" }}>
-                    {MONTH_LABELS[md.getMonth()]} {md.getFullYear()}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
 
       {/* Offline banner — shown when offline with pending changes */}
       <OfflineBanner />
@@ -333,6 +257,16 @@ function AppContent() {
             {...catProps}
           />
         )}
+        {tab === "history" && (
+          <HistoryScreen
+            entries={allEntries}
+            onDelete={removeEntry}
+            onUpdate={updateEntry}
+            household={household}
+            pendingSync={pendingSync}
+            {...catProps}
+          />
+        )}
         {tab === "year" && (
           <YearOverviewScreen
             allEntries={allEntries}
@@ -345,34 +279,34 @@ function AppContent() {
           />
         )}
         {tab === "add" && (
-          <AddScreen onAdd={addEntry} authorName={user?.name} currency={user?.currency} currencyList={currencyList} incomeCategories={incomeCategories} expenseCategories={expenseCategories} investmentCategories={investmentCategories} colorMap={colorMap} />
+          <AddScreen onAdd={addEntry} authorName={user?.name} currency={user?.currency} currencyList={currencyList} onCurrencyPickerOpen={loadCurrencies} incomeCategories={incomeCategories} expenseCategories={expenseCategories} investmentCategories={investmentCategories} colorMap={colorMap} />
         )}
         {tab === "account" && (
           <AccountScreen
             key={accountKey}
             user={user}
             household={household}
+            pendingInvitations={pendingInvitations}
             onLogout={logout}
             onDeleteAccount={deleteAccount}
             onChangePassword={changePassword}
-            entries={entries}
-            onDelete={removeEntry}
-            onUpdate={updateEntry}
-            pendingSync={pendingSync}
             {...catProps}
             customCats={customCats}
             onCreateCategory={createCategory}
             onDeleteCategory={deleteCategory}
             onCreate={createHousehold}
-            onAddMember={addMember}
+            onInvite={sendInvitation}
+            onAcceptInvitation={acceptInvitation}
+            onRejectInvitation={rejectInvitation}
+            onCancelInvitation={cancelInvitation}
             onRemoveMember={removeMember}
             onLeave={leaveHousehold}
             onDeleteHousehold={deleteHousehold}
             onRename={renameHousehold}
-            openAddMember={openHouseholdAddMember}
-            setOpenAddMember={setOpenHouseholdAddMember}
+
             onUpdateProfile={handleUpdateProfile}
             currencyList={currencyList}
+            onCurrencyPickerOpen={loadCurrencies}
           />
         )}
       </View>
@@ -380,44 +314,97 @@ function AppContent() {
       {/* Bottom tab bar */}
       <View style={{
         flexDirection: "row",
+        alignItems: "center",
         backgroundColor: C.cardBg,
         borderTopWidth: 0.5,
         borderTopColor: C.border,
-        paddingBottom: 8,
+        paddingBottom: 12,
         paddingTop: 8,
+        paddingHorizontal: 4,
       }}>
         {TABS.map(t => {
           const active = tab === t.id;
+
+          // Center Add button — elevated rounded square
+          if (t.id === "add") {
+            return (
+              <View key={t.id} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                <TouchableOpacity
+                  onPress={() => { setTab(t.id); }}
+                  activeOpacity={0.8}
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: 16,
+                    backgroundColor: isDark ? "#2D2B52" : "#E8E6F5",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginBottom: 2,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.12,
+                    shadowRadius: 4,
+                    elevation: 4,
+                  }}
+                >
+                  <Text style={{ fontSize: 28, lineHeight: 32, color: isDark ? "#A89FD6" : "#6B63B5", fontWeight: "300" }}>+</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          }
+
+          // Regular tab — active gets pill background with icon+label, inactive just icon+label
+          const iconMap = {
+            month:   { active: "📅", inactive: "📅" },
+            history: { active: "🕐", inactive: "🕐" },
+            year:    { active: "📊", inactive: "📊" },
+            account: { active: "👤", inactive: "👤" },
+          };
+          const emoji = iconMap[t.id]?.inactive ?? "•";
+          const hasNotification = t.id === "account" && pendingCount > 0;
+
           return (
             <TouchableOpacity
-              key={t.id} style={{
-                flex: 1,
-                alignItems: "center",
-                paddingVertical: 8,
-                position: "relative",
-              }}
-              onPress={() => { setTab(t.id); setShowMonthPicker(false); if (t.id === "account") setAccountKey(k => k + 1); }}
+              key={t.id}
+              style={{ flex: 1, alignItems: "center", paddingVertical: 4 }}
+              onPress={() => { setTab(t.id); if (t.id === "account") setAccountKey(k => k + 1); }}
               activeOpacity={0.7}
             >
-              <View style={{ position: "relative" }}>
-                <Text style={{ fontSize: 18 }}>{t.emoji}</Text>
-              </View>
-              <Text style={{
-                fontSize: 10,
-                marginTop: 3,
-                color: active ? C.text : C.textTertiary,
-                fontWeight: active ? "700" : "400"
+              {/* Always 2 rows: icon on top, label below. Active gets pill background. */}
+              <View style={{
+                alignItems: "center",
+                alignSelf: "center",
+                backgroundColor: active ? (isDark ? "#2A2A3D" : "#ECEAF8") : "transparent",
+                borderRadius: active ? 14 : 0,
+                overflow: "hidden",
+                paddingHorizontal: active ? 14 : 0,
+                paddingVertical: active ? 5 : 0,
               }}>
-                {t.label}
-              </Text>
-              {active && <View style={{
-                position: "absolute",
-                bottom: 0,
-                width: 32,
-                height: 2.5,
-                backgroundColor: C.green,
-                borderRadius: 2,
-              }} />}
+                <View style={{ position: "relative" }}>
+                  <Text style={{ fontSize: 16, color: active ? C.text : C.textTertiary }}>{emoji}</Text>
+                  {hasNotification && !active && (
+                    <View style={{
+                      position: "absolute",
+                      top: -1,
+                      right: -3,
+                      width: 7,
+                      height: 7,
+                      borderRadius: 4,
+                      backgroundColor: "#E53935",
+                      borderWidth: 1,
+                      borderColor: C.cardBg,
+                    }} />
+                  )}
+                </View>
+                <Text style={{
+                  fontSize: 10,
+                  marginTop: 2,
+                  color: active ? C.text : C.textTertiary,
+                  fontWeight: active ? "700" : "400",
+                }}>
+                  {t.label}
+                </Text>
+              </View>
             </TouchableOpacity>
           );
         })}
@@ -428,10 +415,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <NetworkProvider>
-        <AppContent />
-      </NetworkProvider>
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <NetworkProvider>
+          <AppContent />
+        </NetworkProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
