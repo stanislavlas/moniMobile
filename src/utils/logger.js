@@ -9,7 +9,7 @@
  * To disable logs in production, set ENABLE_DEBUG_LOGS to false
  */
 
-const ENABLE_DEBUG_LOGS = true; // Set to false to disable all debug logs
+const ENABLE_DEBUG_LOGS = __DEV__; // Logs are enabled in dev builds only
 
 const LOG_COLORS = {
   auth: '🔐',
@@ -55,10 +55,6 @@ class Logger {
 
   warn(category, message, data) {
     this._log('warn', category, message, data);
-  }
-
-  debug(category, message, data) {
-    this._log('log', category, message, data);
   }
 
   // Convenience methods for common categories
