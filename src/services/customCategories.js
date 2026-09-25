@@ -25,6 +25,15 @@ import { isRetryableError } from "../utils/isRetryableError.js";
 
 logger.info('categories', 'Categories service loaded');
 
+/** Returns true if any pending-sync queue entry references the given categoryId. */
+async function isCategoryInUseByQueue(categoryId) {
+  const { loadQueue } = await import("../utils/queueStorage.js");
+  const queue = await loadQueue();
+  return queue.operations.some(op =>
+    op.type?.startsWith('entry.') && op.payload?.categoryId === categoryId
+  );
+}
+
 export async function listCustomCategories() {
   logger.info('categories', 'listCustomCategories called');
   try {
@@ -85,12 +94,7 @@ export async function deleteCustomCategory(categoryId, { skipQueue = false } = {
     const { default: syncService } = await import("./syncService.js");
     if (!syncService.isOnline()) {
       logger.info('categories', 'deleteCustomCategory: offline, queuing directly');
-      const { loadQueue } = await import("../utils/queueStorage.js");
-      const queue = await loadQueue();
-      const hasEntriesWithCategory = queue.operations.some(op =>
-        op.type?.startsWith('entry.') && op.payload?.categoryId === categoryId
-      );
-      if (hasEntriesWithCategory) {
+      if (await isCategoryInUseByQueue(categoryId)) {
         throw new Error(
           'Cannot delete category while entries using it are pending sync. ' +
           'Please wait for sync to complete or change those entries first.'
@@ -112,12 +116,7 @@ export async function deleteCustomCategory(categoryId, { skipQueue = false } = {
 
     if (!skipQueue && isRetryableError(error)) {
       try {
-        const { loadQueue } = await import("../utils/queueStorage.js");
-        const queue = await loadQueue();
-        const hasEntriesWithCategory = queue.operations.some(op =>
-          op.type?.startsWith('entry.') && op.payload?.categoryId === categoryId
-        );
-        if (hasEntriesWithCategory) {
+        if (await isCategoryInUseByQueue(categoryId)) {
           throw new Error(
             'Cannot delete category while entries using it are pending sync. ' +
             'Please wait for sync to complete or change those entries first.'
