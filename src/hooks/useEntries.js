@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { listEntries } from "../services/entries.js";
 import { fromApiTransactionType, fromApiNecessity } from "../utils/enums.js";
 import { logger } from "../utils/logger.js";
+import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 import syncService from "../services/syncService.js";
 
 const LS_KEY     = "budget_cache";
@@ -32,6 +33,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
   const [entries,     setEntries]    = useState([]);
   const [allEntries,  setAllEntries] = useState([]);
   const [loading,     setLoading]    = useState(true);
+  const [error,       setError]      = useState(null);
   const [pendingSync, setPendingSync] = useState(new Set());
 
   const filtered = entries.filter(e => !yearMonth || e.date?.startsWith(yearMonth));
@@ -48,6 +50,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
     const cachePromise   = loadCache();
     const networkPromise = listEntries(yearMonth, household).catch(err => {
       logger.info('entries', 'fetchEntries network error (will use cache):', err.message);
+      setError(err.message);
       return null;
     });
 
@@ -57,6 +60,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
 
     const data = await networkPromise;
     if (data) {
+      setError(null);
       const transformed = data.map(transformFromApi);
       setEntries(transformed);
       saveCache(transformed);
@@ -112,11 +116,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
     setPendingSync(prev => new Set([...prev, tempId]));
 
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("entry.batchCreate", { entries: [entry], tempIds: [tempId] }, user?.userId);
-      svc.syncAll().catch(() => {});
+      await enqueueAndSync("entry.batchCreate", { entries: [entry], tempIds: [tempId] });
     } catch (err) {
       logger.error('entries', 'Failed to enqueue addEntry', err.message);
     }
@@ -128,14 +128,15 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
       saveCache(n);
       return n;
     });
+    setAllEntries(prev => {
+      const n = prev.map(e => e.entryId === updated.entryId ? { ...updated, pendingSync: true } : e);
+      saveAllCache(n);
+      return n;
+    });
     setPendingSync(prev => new Set([...prev, updated.entryId]));
 
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("entry.update", updated, user?.userId);
-      svc.syncAll().catch(() => {});
+      await enqueueAndSync("entry.update", updated);
     } catch (err) {
       logger.error('entries', 'Failed to enqueue updateEntry', err.message);
     }
@@ -147,11 +148,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
     setPendingSync(prev => { const next = new Set(prev); next.delete(entryId); return next; });
 
     try {
-      const { default: svc } = await import("../services/syncService.js");
-      const { getStoredUser } = await import("../services/auth.js");
-      const user = await getStoredUser();
-      await svc.enqueue("entry.delete", { entryId }, user?.userId);
-      svc.syncAll().catch(() => {});
+      await enqueueAndSync("entry.delete", { entryId });
     } catch (err) {
       logger.error('entries', 'Failed to enqueue removeEntry', err.message);
     }
@@ -161,7 +158,7 @@ export function useEntries(yearMonth, isAuthenticated, household = false) {
     entries: filtered,
     allEntries,
     loading,
-    error: null,
+    error,
     addEntry,
     updateEntry,
     removeEntry,
