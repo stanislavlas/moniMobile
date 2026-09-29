@@ -7,6 +7,7 @@ import {
   loginWithBiometric as apiLoginWithBiometric,
   storeBiometricCredentials,
   updateProfile as apiUpdateProfile,
+  getProfile as apiGetProfile,
   verifyRegistration as apiVerifyRegistration,
   resendVerificationCode as apiResendVerificationCode,
 } from "../services/auth.js";
@@ -14,6 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { clearEntriesCache } from "./useEntries.js";
 import { clearHouseholdCache } from "./useHousehold.js";
 import { isBiometricSupported, hasBiometricEnrolled, isBiometricEnabled, enableBiometric, authenticateWithBiometric } from "../services/biometric.js";
+import { authEvents } from "../utils/authEvents.js";
 
 export function useAuth() {
   const [user, setUser]       = useState(null);
@@ -61,6 +63,10 @@ export function useAuth() {
       if (storedUser && token) {
         setUser(storedUser);
         setReady(true);
+        // Fetch fresh profile in the background to sync any changes made on other devices
+        apiGetProfile()
+          .then((fresh) => setUser(fresh))
+          .catch(() => {}); // Non-critical — cached value is still usable
       } else {
         setReady(true);
         await triggerBiometricLogin();
@@ -82,8 +88,18 @@ export function useAuth() {
     }
   }, [user, ready, triggerBiometricLogin]);
 
+  // Auto-logout when any authRequest receives a 401 or refresh fails.
+  // Mirrors the web's window "auth:expired" event listener pattern.
+  useEffect(() => {
+    return authEvents.subscribe((event) => {
+      if (event === "expired") {
+        setUser(null);
+      }
+    });
+  }, []);
+
   const isAuthenticated = !!(user);
-  const clearError = () => setError(null);
+  const clearError = useCallback(() => setError(null), []);
 
   // After a successful password login, store credentials for biometric use.
   // - If biometrics are already enabled: silently refresh the stored credentials
@@ -179,11 +195,12 @@ export function useAuth() {
     }
   }, [pendingRegistration]);
 
-  const resendRegistrationCode = useCallback(async () => {
-    if (!pendingRegistration) return;
+  const resendRegistrationCode = useCallback(async (email) => {
+    const target = email ?? pendingRegistration?.email;
+    if (!target) return;
     setLoading(true); setError(null);
     try {
-      await apiResendVerificationCode(pendingRegistration.email);
+      await apiResendVerificationCode(target);
     } catch (e) {
       setError(e.message);
       throw e;
@@ -195,7 +212,7 @@ export function useAuth() {
   const cancelRegistrationVerification = useCallback(() => {
     setPendingRegistration(null);
     clearError();
-  }, []);
+  }, [clearError]);
 
   const loginWithBiometric = useCallback(async () => {
     setLoading(true); setError(null);
@@ -259,8 +276,9 @@ export function useAuth() {
   const confirmBiometricEnroll = useCallback(async () => {
     if (!pendingBiometricEnroll) return;
     try {
-      await enableBiometric(pendingBiometricEnroll.email);
+      // Store credentials first — so they exist before the feature flag is set
       await storeBiometricCredentials(pendingBiometricEnroll.email, pendingBiometricEnroll.password);
+      await enableBiometric(pendingBiometricEnroll.email);
     } finally {
       setPendingBiometricEnroll(null);
     }

@@ -1,6 +1,6 @@
-# PersonalFinanceMobile
+# Moni
 
-Expo SDK ~57 / React Native 0.86 mobile app for the Personal Finance tracker.
+Expo SDK ~57 / React Native 0.86 mobile app for Moni — a personal household finance tracker.
 
 ## Tech Stack
 
@@ -18,7 +18,7 @@ Expo SDK ~57 / React Native 0.86 mobile app for the Personal Finance tracker.
 
 - Node.js 18+
 - Expo Go app on your phone (Android or iOS)
-- [PersonalFinanceAPI](https://github.com/stanislavlas/PersonalFinanceAPI) running on your local machine
+- [MoniAPI](https://github.com/stanislavlas/moniAPI) running on your local machine
 - Phone and computer on the same WiFi network
 
 ### Setup
@@ -99,6 +99,6 @@ eas build --platform android --profile preview
 
 | Variable | Description |
 |---|---|
-| `EXPO_PUBLIC_API_BASE_URL` | Base URL of PersonalFinanceAPI (e.g. `http://192.168.1.100:8080`) |
+| `EXPO_PUBLIC_API_BASE_URL` | Base URL of MoniAPI (e.g. `http://192.168.1.100:8080`) |
 
 Never use `localhost` — on a physical device it refers to the phone itself, not your computer.

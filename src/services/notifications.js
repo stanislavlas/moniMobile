@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const KEY_NOTIF_PREFS = "budget_notification_prefs";
-const NOTIF_IDENTIFIER = "budget_expense_reminder";
+const KEY_NOTIF_PREFS = "moni_notification_prefs";
+const NOTIF_IDENTIFIER = "moni_expense_reminder";
 
 /**
  * Lazily load expo-notifications. Returns null when running in Expo Go (SDK 53+)
@@ -29,6 +29,7 @@ if (Notifications) {
         shouldShowList: true,
         shouldPlaySound: false,
         shouldSetBadge: false,
+        shouldVibrateDevice: true,
       }),
     });
   } catch {
@@ -68,6 +69,13 @@ export async function cancelNotifications() {
 /**
  * Compute the trigger config for expo-notifications from user prefs.
  *
+ * All frequencies now correctly respect the user's chosen `time` (HH:mm).
+ * - daily:   fires every day at the chosen time
+ * - weekly:  fires every week on the same weekday at the chosen time
+ * - monthly: fires every month on the same day-of-month at the chosen time
+ * - custom:  fires every N days; first trigger is set to the chosen time today
+ *            (or tomorrow if that time has already passed today)
+ *
  * @param {string} time      - "HH:mm"
  * @param {string} frequency - "daily" | "weekly" | "monthly" | "custom"
  * @param {number} customDays
@@ -85,26 +93,46 @@ function buildTrigger(time, frequency, customDays) {
   }
 
   if (frequency === "weekly") {
+    // WEEKLY trigger fires every week on the same weekday at the given time.
+    const now = new Date();
     return {
-      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: 7 * 24 * 60 * 60,
-      repeats: true,
+      type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+      weekday: now.getDay() + 1, // expo-notifications: 1=Sunday … 7=Saturday
+      hour,
+      minute,
     };
   }
 
   if (frequency === "monthly") {
+    // CALENDAR trigger with a day-of-month and repeats fires monthly.
+    const now = new Date();
     return {
-      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: 30 * 24 * 60 * 60,
+      type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+      day: now.getDate(),
+      hour,
+      minute,
       repeats: true,
     };
   }
 
   if (frequency === "custom") {
+    // TIME_INTERVAL is the only option for arbitrary day counts.
+    // Calculate seconds until the next occurrence of the chosen time so the
+    // first firing lands at the right time of day.
     const days = Math.max(1, customDays || 1);
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(hour, minute, 0, 0);
+    if (next <= now) {
+      // Chosen time already passed today — schedule from same time tomorrow + (days-1)
+      next.setDate(next.getDate() + 1);
+    }
+    const secondsUntilFirst = Math.round((next - now) / 1000);
+    // After the first trigger, repeat every N days
+    const intervalSeconds = days * 24 * 60 * 60;
     return {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: days * 24 * 60 * 60,
+      seconds: secondsUntilFirst > 0 ? secondsUntilFirst : intervalSeconds,
       repeats: true,
     };
   }
@@ -161,6 +189,7 @@ export async function applyNotificationPreferences(prefs) {
       content: {
         title: "Budget reminder",
         body: "Don't forget to log your expenses!",
+        vibrationPattern: [0, 250, 100, 250],
       },
       trigger,
     });

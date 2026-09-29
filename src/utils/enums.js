@@ -30,55 +30,50 @@ export function fromApiTransactionType(apiType) {
 
 // Necessity mapping
 export const Necessity = {
-  NEED: "NEED",
-  WANT: "WANT",
+  NECESSARY: "NECESSARY",
+  OPTIONAL:  "OPTIONAL",
 };
 
+/**
+ * Converts a UI necessity value ("necessary" | "optional") to the API format.
+ * The API now uses "NECESSARY" / "OPTIONAL" directly.
+ */
 export function toApiNecessity(uiNecessity) {
-  const map = {
-    necessary: Necessity.NEED,
-    optional: Necessity.WANT,
-  };
-  return map[uiNecessity] || Necessity.NEED;
+  return uiNecessity === "optional" ? Necessity.OPTIONAL : Necessity.NECESSARY;
 }
 
+/**
+ * Converts an API necessity string to the UI format ("necessary" | "optional").
+ * Accepts both the current values (NECESSARY/OPTIONAL) and legacy values (NEED/WANT)
+ * that may still be present in locally-cached entries.
+ */
 export function fromApiNecessity(apiNecessity) {
-  const map = {
-    NEED: "necessary",
-    WANT: "optional",
-  };
-  return map[apiNecessity] || "necessary";
+  if (apiNecessity === "OPTIONAL" || apiNecessity === "WANT") return "optional";
+  return "necessary"; // covers NECESSARY, NEED, and any unknown value
 }
 
-// Currency (already uppercase, no mapping needed)
-export const Currency = {
-  EUR: "EUR",
-  USD: "USD",
-  CZK: "CZK",
-};
+/** Returns true when an entry's necessity is "necessary" (handles both API and UI values). */
+export const isNecessary = (entry) => fromApiNecessity(entry.necessity) === "necessary";
 
-// Member Role
-export const MemberRole = {
-  OWNER: "OWNER",
-  MEMBER: "MEMBER",
-};
+/** Returns true when an entry's necessity is "optional" (handles both API and UI values). */
+export const isOptional  = (entry) => fromApiNecessity(entry.necessity) === "optional";
 
-const CURRENCY_SYMBOLS = {
-  AUD: "A$",  BRL: "R$",  CAD: "C$",  CHF: "CHF", CNY: "¥",   CZK: "Kč",
-  DKK: "kr",  EUR: "€",   GBP: "£",   HKD: "HK$", HUF: "Ft",  IDR: "Rp",
-  ILS: "₪",   INR: "₹",   ISK: "kr",  JPY: "¥",   KRW: "₩",   MXN: "MX$",
-  MYR: "RM",  NOK: "kr",  NZD: "NZ$", PHP: "₱",   PLN: "zł",  RON: "lei",
-  SEK: "kr",  SGD: "S$",  THB: "฿",   TRY: "₺",   USD: "$",   ZAR: "R",
-};
-
-// Currencies where symbol follows the number
-const SUFFIX_CURRENCIES = new Set(["CZK", "HUF", "PLN", "RON", "SEK", "NOK", "DKK", "ISK"]);
-
+/**
+ * Format a numeric value as a locale-sensitive currency string.
+ * Uses Intl.NumberFormat for correct locale formatting across all currencies.
+ * Falls back to a simple "{value} {currency}" representation if Intl is unavailable
+ * or the currency code is not recognised.
+ */
 export function formatCurrency(value, currency) {
-  const symbol    = CURRENCY_SYMBOLS[currency] || currency || "";
-  const num       = typeof value === "number" ? value : parseFloat(value) || 0;
-  const formatted = num.toFixed(2);
-  return SUFFIX_CURRENCIES.has(currency)
-    ? `${formatted} ${symbol}`
-    : `${symbol}${formatted}`;
+  const num = typeof value === "number" ? value : parseFloat(value) || 0;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency || "EUR",
+      maximumFractionDigits: 2,
+    }).format(num);
+  } catch {
+    // Fallback for unrecognised currency codes
+    return `${num.toFixed(2)} ${currency || ""}`.trim();
+  }
 }

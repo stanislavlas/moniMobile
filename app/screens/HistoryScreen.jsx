@@ -1,20 +1,71 @@
 import { useState, useMemo } from "react";
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from "react-native";
-import { fmt } from "../../src/utils/theme.js";
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from "react-native";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
-import { toApiNecessity, formatCurrency } from "../../src/utils/enums.js";
+import { toApiNecessity, formatCurrency, isNecessary, isOptional } from "../../src/utils/enums.js";
+import { MONTH_SHORT, MONTH_LABELS } from "../../src/utils/theme.js";
+import { useMonthEntries } from "../../src/utils/useMonthEntries.js";
 
 const NECESSITY_STYLE = {
   necessary: { bg: "#FAECE7", color: "#993C1D", label: "🔒 Necessary" },
   optional:  { bg: "#FAEEDA", color: "#854F0B", label: "✂️ Optional"  },
 };
 
-export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCategories, allCategories, colorMap, getCategoryById, pendingSync }) {
+const CACHE_PREFIX = "moni_entries_cache_";
+
+export function HistoryScreen({ user, onDelete, onUpdate, household, showPersonalOnly, incomeCategories, expenseCategories, investmentCategories, allCategories, colorMap, getCategoryById, pendingSync }) {
   const { colors: C, styles: S } = useTheme();
-  const [expandedId, setExpandedId] = useState(null);
-  const [search, setSearch]         = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
-  const [necessityFilter, setNecessityFilter] = useState("all"); // "all" | "necessary" | "optional"
+  const showHousehold = !!household && !showPersonalOnly;
+
+  // An entry can be modified by its author OR by the household owner.
+  const canModify = (entry) => {
+    if (!user) return false;
+    if (entry.userId === user.userId) return true;
+    if (showHousehold && user.householdRole === "OWNER") return true;
+    return false;
+  };
+
+  const [filterMonth, setFilterMonth] = useState(() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; });
+  const [expandedId, setExpandedId]   = useState(null);
+  const [search, setSearch]           = useState("");
+  const [typeFilter, setTypeFilter]           = useState("all");
+  const [necessityFilter, setNecessityFilter] = useState("all");
+
+  const { monthsData, monthCache } = useMonthEntries(CACHE_PREFIX, showHousehold, filterMonth);
+
+  const currentData = monthCache[filterMonth] ?? { entries: [], loading: true, error: null };
+  const rawEntries  = currentData.entries;
+  const loading     = currentData.loading;
+
+  const filtered = useMemo(() => {
+    let list = rawEntries;
+    if (typeFilter !== "all")      list = list.filter(e => e.type === typeFilter);
+    if (necessityFilter !== "all") list = list.filter(e =>
+      necessityFilter === "necessary" ? isNecessary(e) : isOptional(e)
+    );
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(e => e.note?.toLowerCase().includes(q) || getCategoryById(e.categoryId).label.toLowerCase().includes(q));
+    }
+    return list;
+  }, [rawEntries, typeFilter, necessityFilter, search, getCategoryById]);
+
+  function confirmDelete(entryId, note) {
+    const entry = rawEntries.find(e => e.entryId === entryId);
+    if (!entry || !canModify(entry)) return;
+    Alert.alert("Delete entry", `Delete "${note || "this entry"}"?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => {
+        // Forward entry.date so removeEntry can emit the correct entryEvent,
+        // which the useMonthEntries hook will pick up and invalidate the cache.
+        onDelete(entryId, entry.date);
+      }},
+    ]);
+  }
+
+  const selectedMonthLabel = useMemo(() => {
+    const d = new Date(filterMonth + "-01");
+    return `${MONTH_LABELS[d.getMonth()]} ${d.getFullYear()}`;
+  }, [filterMonth]);
 
   const localStyles = {
     searchRow:     { flexDirection: "row", alignItems: "center", backgroundColor: C.bgSecondary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 0.5, borderColor: C.border },
@@ -27,37 +78,35 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
     necessityBtn:  { flex: 1, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, alignItems: "center" },
   };
 
-  const filtered = useMemo(() => {
-    let list = entries;
-    if (typeFilter !== "all")      list = list.filter(e => e.type === typeFilter);
-    if (necessityFilter !== "all") list = list.filter(e => {
-      if (necessityFilter === "necessary") return e.necessity === "necessary" || !e.necessity;
-      return e.necessity === "optional";
-    });
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(e => e.note?.toLowerCase().includes(q) || getCategoryById(e.category).label.toLowerCase().includes(q));
-    }
-    return list;
-  }, [entries, typeFilter, necessityFilter, search]);
-
-  function confirmDelete(entryId, note) {
-    Alert.alert("Delete entry", `Delete "${note || "this entry"}"?`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => onDelete(entryId) },
-    ]);
-  }
-
-  async function cycleNecessity(entry) {
-    const next = entry.necessity === "optional" ? "necessary" : "optional";
-    await onUpdate({ ...entry, necessity: toApiNecessity(next) });
-  }
-
   return (
     <View style={S.screen}>
       <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
         {/* Title */}
-        <Text style={[S.h2, { marginBottom: 14 }]}>History</Text>
+        <Text style={[S.h2, { marginBottom: 10 }]}>History</Text>
+
+        {/* Month scroller */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+          <View style={[S.row, { gap: 6, paddingVertical: 2 }]}>
+            {monthsData.map(({ key, month, year }) => {
+              const isActive = key === filterMonth;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  onPress={() => setFilterMonth(key)}
+                  style={{
+                    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
+                    backgroundColor: isActive ? C.green : C.cardBg,
+                    borderWidth: 0.5, borderColor: isActive ? C.green : C.border,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: isActive ? "#fff" : C.text }}>
+                    {MONTH_SHORT[month]} {year}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
 
         {/* Search */}
         <View style={localStyles.searchRow}>
@@ -74,7 +123,7 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
           ) : null}
         </View>
 
-        {/* Filters row 1 — type */}
+        {/* Filters row */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
           <View style={[S.row, { gap: 6, paddingBottom: 4 }]}>
             {["all","income","expense","investment"].map(t => (
@@ -94,7 +143,6 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
 
             <View style={{ width: 0.5, backgroundColor: C.border, marginHorizontal: 4 }} />
 
-            {/* Necessity filter — only useful when showing expenses */}
             {typeFilter !== "investment" && ["all","necessary","optional"].map(n => (
               <TouchableOpacity key={n} onPress={() => setNecessityFilter(n)}
                 style={[localStyles.chip, necessityFilter === n && {
@@ -113,19 +161,25 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
 
         <View style={[S.divider, { marginTop: 10, marginBottom: 4 }]} />
         <Text style={[S.small, { paddingVertical: 6 }]}>
-          {filtered.length} transaction{filtered.length !== 1 ? "s" : ""}
+          {filtered.length} transaction{filtered.length !== 1 ? "s" : ""}{loading ? " (loading…)" : ""}
         </Text>
         <View style={S.divider} />
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
-        {filtered.length === 0 ? (
+        {loading && !rawEntries.length ? (
+          <View style={{ alignItems: "center", paddingVertical: 48 }}>
+            <ActivityIndicator color={C.green} />
+          </View>
+        ) : filtered.length === 0 ? (
           <Text style={[S.small, { textAlign: "center", paddingVertical: 48 }]}>
-            {search || typeFilter !== "all" || necessityFilter !== "all" ? "No matching transactions" : "No transactions this month"}
+            {search || typeFilter !== "all" || necessityFilter !== "all"
+              ? "No matching transactions"
+              : `No transactions in ${selectedMonthLabel}`}
           </Text>
         ) : filtered.map(entry => {
-          const cat      = getCategoryById(entry.category);
-          const color    = colorMap[entry.category] || "#888";
+          const cat      = getCategoryById(entry.categoryId);
+          const color    = colorMap[entry.categoryId] || "#888";
           const expanded = expandedId === entry.entryId;
           const ns       = NECESSITY_STYLE[entry.necessity || "necessary"];
 
@@ -144,7 +198,6 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
                     <Text style={[S.body, { fontWeight: "500", flexShrink: 1 }]} numberOfLines={1}>
                       {entry.note || cat.label}
                     </Text>
-                    {/* Necessity badge — expense only */}
                     {entry.type === "expense" && (
                       <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, backgroundColor: ns.bg }}>
                         <Text style={{ fontSize: 10, color: ns.color }}>
@@ -152,7 +205,6 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
                         </Text>
                       </View>
                     )}
-                    {/* Pending sync badge */}
                     {pendingSync?.has(entry.entryId) && (
                       <View style={{ paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, backgroundColor: "#FFF3CD", borderWidth: 0.5, borderColor: "#FAC775" }}>
                         <Text style={{ fontSize: 9, color: "#854F0B", fontWeight: "600" }}>PENDING</Text>
@@ -165,54 +217,59 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
                   </Text>
                 </View>
                 <Text style={[localStyles.amount, { color: entry.type === "income" ? C.green : entry.type === "investment" ? C.blue : C.red }]}>
-                  {entry.type === "income" ? "+" : entry.type === "investment" ? "+" : "−"}{formatCurrency(entry.amount, entry.currency)}
+                  {entry.type === "income" ? "+" : entry.type === "investment" ? "+" : "−"}{formatCurrency(entry.amount, entry.currency || user?.currency)}
                 </Text>
               </TouchableOpacity>
 
               {expanded && (
                 <View style={{ paddingLeft: 52, paddingBottom: 14 }}>
-                  {/* Necessity toggle for expenses */}
-                  {entry.type === "expense" && (
-                    <View style={{ marginBottom: 12 }}>
-                      <Text style={[S.label, { marginBottom: 8 }]}>Mark as</Text>
-                      <View style={[S.row, { gap: 8 }]}>
-                        {["necessary","optional"].map(n => {
-                          const active = (entry.necessity || "necessary") === n;
-                          const nstyle = NECESSITY_STYLE[n];
+                  {canModify(entry) ? (
+                    <>
+                      {entry.type === "expense" && (
+                        <View style={{ marginBottom: 12 }}>
+                          <Text style={[S.label, { marginBottom: 8 }]}>Mark as</Text>
+                          <View style={[S.row, { gap: 8 }]}>
+                            {["necessary","optional"].map(n => {
+                              const active = (entry.necessity || "necessary") === n;
+                              const nstyle = NECESSITY_STYLE[n];
+                              return (
+                                <TouchableOpacity key={n} onPress={() => onUpdate({ ...entry, necessity: toApiNecessity(n) })}
+                                  style={[localStyles.necessityBtn, active && { backgroundColor: nstyle.bg, borderColor: n === "necessary" ? C.red : C.amber }]}>
+                                  <Text style={{ fontSize: 12, color: active ? nstyle.color : C.textTertiary, fontWeight: active ? "600" : "400" }}>
+                                    {nstyle.label}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      )}
+
+                      <Text style={[S.label, { marginBottom: 8 }]}>Change category</Text>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                        {(entry.type === "income" ? incomeCategories : entry.type === "investment" ? investmentCategories : expenseCategories).map(c => {
+                          const cId   = c.id || c.categoryId;
+                          const active = entry.categoryId === cId;
+                          const cc    = colorMap[cId] || "#888";
                           return (
-                            <TouchableOpacity key={n} onPress={() => onUpdate({ ...entry, necessity: n })}
-                              style={[localStyles.necessityBtn, active && { backgroundColor: nstyle.bg, borderColor: n === "necessary" ? C.red : C.amber }]}>
-                              <Text style={{ fontSize: 12, color: active ? nstyle.color : C.textTertiary, fontWeight: active ? "600" : "400" }}>
-                                {nstyle.label}
-                              </Text>
+                            <TouchableOpacity key={cId} onPress={async () => {
+                              await onUpdate({ ...entry, categoryId: cId });
+                              setExpandedId(null);
+                            }} style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, borderWidth: 0.5, borderColor: active ? cc : C.border, backgroundColor: active ? cc + "20" : C.bgSecondary }}>
+                              <Text style={{ fontSize: 12, color: active ? cc : C.textSecondary }}>{c.emoji} {c.label}</Text>
                             </TouchableOpacity>
                           );
                         })}
                       </View>
-                    </View>
+                      <TouchableOpacity onPress={() => confirmDelete(entry.entryId, entry.note)} style={localStyles.deleteBtn}>
+                        <Text style={{ fontSize: 12, color: C.red }}>Delete</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <Text style={[S.small, { color: C.textTertiary, fontStyle: "italic" }]}>
+                      Added by {entry.authorName || "another member"}
+                    </Text>
                   )}
-
-                  {/* Category picker */}
-                  <Text style={[S.label, { marginBottom: 8 }]}>Change category</Text>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-                    {allCategories.map(c => {
-                      const cId   = c.id || c.categoryId;
-                      const active = entry.category === cId;
-                      const cc    = colorMap[cId] || "#888";
-                      return (
-                        <TouchableOpacity key={cId} onPress={async () => {
-                          const isInc = incomeCategories.find(ic => (ic.id || ic.categoryId) === cId);
-                          await onUpdate({ ...entry, category: cId, type: isInc ? "income" : "expense" });
-                          setExpandedId(null);
-                        }} style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16, borderWidth: 0.5, borderColor: active ? cc : C.border, backgroundColor: active ? cc + "20" : C.bgSecondary }}>
-                          <Text style={{ fontSize: 12, color: active ? cc : C.textSecondary }}>{c.emoji} {c.label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <TouchableOpacity onPress={() => confirmDelete(entry.entryId, entry.note)} style={localStyles.deleteBtn}>
-                    <Text style={{ fontSize: 12, color: C.red }}>Delete</Text>
-                  </TouchableOpacity>
                 </View>
               )}
             </View>
@@ -222,4 +279,3 @@ export function HistoryScreen({ entries, onDelete, onUpdate, household, incomeCa
     </View>
   );
 }
-

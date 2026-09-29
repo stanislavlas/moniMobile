@@ -1,10 +1,11 @@
 import React, { createContext, useState, useContext, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { lightColors, darkColors, getStyles } from "../utils/theme.js";
+import { logger } from "../utils/logger.js";
 
 const ThemeContext = createContext();
 
-const THEME_KEY = "budget_theme";
+const THEME_KEY = "moni_theme";
 
 export function ThemeProvider({ children }) {
   const [isDark, setIsDark] = useState(false);
@@ -19,7 +20,7 @@ export function ThemeProvider({ children }) {
           setIsDark(saved === "dark");
         }
       } catch (e) {
-        console.error("Failed to load theme:", e);
+        logger.error('ui', 'Failed to load theme:', e);
       } finally {
         setIsLoaded(true);
       }
@@ -32,7 +33,7 @@ export function ThemeProvider({ children }) {
     try {
       await AsyncStorage.setItem(THEME_KEY, newTheme ? "dark" : "light");
     } catch (e) {
-      console.error("Failed to save theme:", e);
+      logger.error('ui', 'Failed to save theme:', e);
     }
   };
 

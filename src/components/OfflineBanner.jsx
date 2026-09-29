@@ -9,10 +9,10 @@
 
 import { useState, useEffect } from "react";
 import { View, Text, TouchableOpacity } from "react-native";
-import { useSync } from "../hooks/useSync.js";
+import { useNetwork } from "../contexts/NetworkContext.js";
 
 export function OfflineBanner() {
-  const { isOnline, queueSize } = useSync();
+  const { isOnline, queueSize } = useNetwork();
   const [dismissed, setDismissed] = useState(false);
 
   // Re-show banner if new operations are queued after dismissal

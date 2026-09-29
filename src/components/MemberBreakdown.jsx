@@ -6,7 +6,7 @@ import { formatCurrency } from "../utils/enums.js";
  * Renders a "By member" breakdown list for household views.
  *
  * Props:
- *   breakdown  — array of [name, { income, expense }] tuples
+ *   breakdown  — array of [name, { income, expense, invested }] tuples
  *   currency   — display currency code (default "EUR")
  *   style      — optional extra style for the outer View
  */
@@ -27,8 +27,9 @@ export function MemberBreakdown({ breakdown, currency = "EUR", style }) {
           </View>
           <Text style={[S.body, { flex: 1, marginLeft: 10 }]}>{name}</Text>
           <View style={{ alignItems: "flex-end" }}>
-            {t.income  > 0 && <Text style={{ fontSize: 12, fontFamily: "Courier", color: C.green }}>+{fmt(t.income)}</Text>}
-            {t.expense > 0 && <Text style={{ fontSize: 12, fontFamily: "Courier", color: C.red }}>−{fmt(t.expense)}</Text>}
+            {t.income   > 0 && <Text style={{ fontSize: 12, fontFamily: "Courier", color: C.green }}>+{fmt(t.income)}</Text>}
+            {t.expense  > 0 && <Text style={{ fontSize: 12, fontFamily: "Courier", color: C.red }}>−{fmt(t.expense)}</Text>}
+            {t.invested > 0 && <Text style={{ fontSize: 12, fontFamily: "Courier", color: C.blue }}>↗{fmt(t.invested)}</Text>}
           </View>
         </View>
       ))}

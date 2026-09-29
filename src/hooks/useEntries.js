@@ -1,172 +1,124 @@
-import { useState, useEffect, useCallback } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { listEntries } from "../services/entries.js";
-import { fromApiTransactionType, fromApiNecessity } from "../utils/enums.js";
+/**
+ * useEntries — mutation-only hook for mobile.
+ *
+ * Read functionality (fetching, caching) has been moved into each screen
+ * (MonthOverviewScreen, HistoryScreen, YearOverviewScreen) which each manage
+ * their own per-period cache.
+ *
+ * This hook provides:
+ *   - addEntry / updateEntry / removeEntry  (offline-first via syncService)
+ *   - pendingSync Set  (entry IDs awaiting server confirmation)
+ *   - refreshAll       (clears all period caches and re-triggers fetches via entryEvents)
+ *
+ * pendingSync is seeded from the persisted queue on mount so that entries
+ * which were pending before the app was killed still show the PENDING badge.
+ */
+import { useState, useCallback, useEffect } from "react";
 import { logger } from "../utils/logger.js";
 import { enqueueAndSync } from "../utils/enqueueAndSync.js";
+import { entryEvents } from "../utils/entryEvents.js";
 import syncService from "../services/syncService.js";
 
-const LS_KEY     = "budget_cache";
-const LS_KEY_ALL = "budget_cache_all";
+/** Extract entry IDs from the persisted queue (for seeding pendingSync on startup). */
+async function loadPersistedPendingIds() {
+  try {
+    const status = await syncService.getQueueStatus();
+    if (status.total === 0) return new Set();
+    // Load actual operations to extract entry IDs
+    const { loadQueue } = await import("../utils/queueStorage.js");
+    const queue = await loadQueue();
+    const ids = new Set();
+    for (const op of queue.operations) {
+      if (op.status !== "pending") continue;
+      if (op.payload?.entryId) ids.add(op.payload.entryId);
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
 
 export async function clearEntriesCache() {
-  try { await AsyncStorage.multiRemove([LS_KEY, LS_KEY_ALL]); } catch {}
+  // Per-screen caches are managed independently.
+  // Emit a sentinel to signal all screens to invalidate.
+  entryEvents.emit(null);
 }
 
-function transformFromApi(entry) {
-  return {
-    ...entry,
-    type:      fromApiTransactionType(entry.type),
-    necessity: entry.necessity ? fromApiNecessity(entry.necessity) : undefined,
-    amount:    typeof entry.amount === "object" ? entry.amount.value : entry.amount,
-    currency:  typeof entry.amount === "object" ? entry.amount.currency : (entry.currency ?? null),
-    category:  entry.categoryId,
-  };
-}
-
-async function loadCache()     { try { return JSON.parse(await AsyncStorage.getItem(LS_KEY)     || "[]"); } catch { return []; } }
-async function saveCache(e)    { try { await AsyncStorage.setItem(LS_KEY,     JSON.stringify(e)); } catch {} }
-async function loadAllCache()  { try { return JSON.parse(await AsyncStorage.getItem(LS_KEY_ALL) || "[]"); } catch { return []; } }
-async function saveAllCache(e) { try { await AsyncStorage.setItem(LS_KEY_ALL, JSON.stringify(e)); } catch {} }
-
-export function useEntries(yearMonth, isAuthenticated, household = false) {
-  const [entries,     setEntries]    = useState([]);
-  const [allEntries,  setAllEntries] = useState([]);
-  const [loading,     setLoading]    = useState(true);
-  const [error,       setError]      = useState(null);
+export function useEntries() {
   const [pendingSync, setPendingSync] = useState(new Set());
 
-  const filtered = entries.filter(e => !yearMonth || e.date?.startsWith(yearMonth));
-
-  // ── Reads ──────────────────────────────────────────────────────────────────
-  const fetchEntries = useCallback(async () => {
-    if (!isAuthenticated) {
-      setEntries([]);
-      setAllEntries([]);
-      setLoading(false);
-      return;
-    }
-
-    const cachePromise   = loadCache();
-    const networkPromise = listEntries(yearMonth, household).catch(err => {
-      logger.info('entries', 'fetchEntries network error (will use cache):', err.message);
-      setError(err.message);
-      return null;
+  // Seed pendingSync from persisted queue on mount so PENDING badges survive app restart
+  useEffect(() => {
+    loadPersistedPendingIds().then(ids => {
+      if (ids.size > 0) setPendingSync(ids);
     });
+  }, []);
 
-    const cached = await cachePromise;
-    if (cached.length > 0) setEntries(cached);
-    setLoading(false);
-
-    const data = await networkPromise;
-    if (data) {
-      setError(null);
-      const transformed = data.map(transformFromApi);
-      setEntries(transformed);
-      saveCache(transformed);
-    }
-  }, [yearMonth, isAuthenticated, household]);
-
-  const fetchAllEntries = useCallback(async () => {
-    if (!isAuthenticated) {
-      setAllEntries([]);
-      return;
-    }
-
-    const cachePromise   = loadAllCache();
-    const networkPromise = listEntries(null, household).catch(err => {
-      logger.info('entries', 'fetchAllEntries network error (will use cache):', err.message);
-      return null;
-    });
-
-    const cached = await cachePromise;
-    if (cached.length > 0) setAllEntries(cached);
-
-    const data = await networkPromise;
-    if (data) {
-      const transformed = data.map(transformFromApi);
-      setAllEntries(transformed);
-      saveAllCache(transformed);
-    }
-  }, [isAuthenticated, household]);
-
-  useEffect(() => { fetchEntries();    }, [fetchEntries]);
-  useEffect(() => { fetchAllEntries(); }, [fetchAllEntries]);
-
+  // Clear pendingSync entries that were successfully synced
   useEffect(() => {
     const handleSyncComplete = ({ syncedOperations = [] }) => {
-      const hasEntryOps = syncedOperations.some(op => op.type?.startsWith('entry.'));
-      if (!hasEntryOps) return;
-      clearEntriesCache().then(() => {
-        fetchEntries();
-        fetchAllEntries();
-      });
+      const syncedIds = new Set(
+        syncedOperations
+          .filter(op => op.payload?.entryId)
+          .map(op => op.payload.entryId)
+      );
+      if (syncedIds.size > 0) {
+        setPendingSync(prev => {
+          const next = new Set(prev);
+          syncedIds.forEach(id => next.delete(id));
+          return next;
+        });
+      }
     };
     syncService.addEventListener('syncComplete', handleSyncComplete);
     return () => syncService.removeEventListener('syncComplete', handleSyncComplete);
-  }, [fetchEntries, fetchAllEntries]);
+  }, []);
 
-  // ── Writes ─────────────────────────────────────────────────────────────────
   const addEntry = useCallback(async (entry) => {
-    const tempId     = `temp-${Date.now()}`;
-    const optimistic = transformFromApi({ ...entry, entryId: tempId, pendingSync: true });
-
-    setEntries(prev    => { const n = [optimistic, ...prev];    saveCache(n);    return n; });
-    setAllEntries(prev => { const n = [optimistic, ...prev];    saveAllCache(n); return n; });
-    setPendingSync(prev => new Set([...prev, tempId]));
+    if (entry.date) entryEvents.emit(entry.date);
 
     try {
-      await enqueueAndSync("entry.batchCreate", { entries: [entry], tempIds: [tempId] });
+      await enqueueAndSync("entry.create", entry);
     } catch (err) {
-      logger.error('entries', 'Failed to enqueue addEntry', err.message);
+      logger.error('entries', 'Failed to enqueue addEntry', err?.message ?? String(err));
+      throw err;
     }
   }, []);
 
   const updateEntry = useCallback(async (updated) => {
-    setEntries(prev => {
-      const n = prev.map(e => e.entryId === updated.entryId ? { ...updated, pendingSync: true } : e);
-      saveCache(n);
-      return n;
-    });
-    setAllEntries(prev => {
-      const n = prev.map(e => e.entryId === updated.entryId ? { ...updated, pendingSync: true } : e);
-      saveAllCache(n);
-      return n;
-    });
     setPendingSync(prev => new Set([...prev, updated.entryId]));
+
+    if (updated.date) entryEvents.emit(updated.date);
 
     try {
       await enqueueAndSync("entry.update", updated);
     } catch (err) {
-      logger.error('entries', 'Failed to enqueue updateEntry', err.message);
+      logger.error('entries', 'Failed to enqueue updateEntry', err?.message ?? String(err));
+      // Enqueue itself failed — remove from pending so badge doesn't stick
+      setPendingSync(prev => { const next = new Set(prev); next.delete(updated.entryId); return next; });
+      throw err;
     }
   }, []);
 
-  const removeEntry = useCallback(async (entryId) => {
-    setEntries(prev    => { const n = prev.filter(e => e.entryId !== entryId); saveCache(n);    return n; });
-    setAllEntries(prev => { const n = prev.filter(e => e.entryId !== entryId); saveAllCache(n); return n; });
-    setPendingSync(prev => { const next = new Set(prev); next.delete(entryId); return next; });
+  const removeEntry = useCallback(async (entryId, date) => {
+    setPendingSync(prev => new Set([...prev, entryId]));
+
+    if (date) entryEvents.emit(date);
 
     try {
       await enqueueAndSync("entry.delete", { entryId });
     } catch (err) {
-      logger.error('entries', 'Failed to enqueue removeEntry', err.message);
+      logger.error('entries', 'Failed to enqueue removeEntry', err?.message ?? String(err));
+      // Enqueue itself failed — remove from pending so badge doesn't stick
+      setPendingSync(prev => { const next = new Set(prev); next.delete(entryId); return next; });
+      throw err;
     }
   }, []);
 
-  return {
-    entries: filtered,
-    allEntries,
-    loading,
-    error,
-    addEntry,
-    updateEntry,
-    removeEntry,
-    refresh: fetchEntries,
-    refreshAll: useCallback(async () => {
-      await clearEntriesCache();
-      await Promise.all([fetchEntries(), fetchAllEntries()]);
-    }, [fetchEntries, fetchAllEntries]),
-    pendingSync,
-  };
+  const refreshAll = useCallback(() => {
+    // Null sentinel tells all screen caches to fully invalidate and re-fetch
+    entryEvents.emit(null);
+  }, []);
+
+  return { addEntry, updateEntry, removeEntry, pendingSync, refreshAll };
 }

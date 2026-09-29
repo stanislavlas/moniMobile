@@ -12,7 +12,8 @@ import {
 import { storeBiometricCredentials, clearBiometricCredentials } from "../../src/services/auth.js";
 import { getServerUrl, setServerUrl, DEFAULT_URL } from "../../src/services/serverUrl.js";
 import { requestNotificationPermission } from "../../src/services/notifications.js";
-import { HistoryScreen } from "./HistoryScreen.jsx";
+import { useFeedback } from "../../src/hooks/useFeedback.js";
+import { ServerUrlEditor } from "../../src/components/ServerUrlEditor.jsx";
 import { CategoriesScreen } from "./CategoriesScreen.jsx";
 import { HouseholdScreen } from "./HouseholdScreen.jsx";
 import { CurrencyPicker } from "../../src/components/CurrencyPicker.jsx";
@@ -20,47 +21,48 @@ import { PasswordInput } from "../../src/components/PasswordInput.jsx";
 import { FeedbackBanner } from "../../src/components/FeedbackBanner.jsx";
 import { SubScreenHeader } from "../../src/components/SubScreenHeader.jsx";
 import { NavCard } from "../../src/components/NavCard.jsx";
+import { TimePicker } from "../../src/components/TimePicker.jsx";
 
 export function AccountScreen({
   user,
   household,
+  householdError,
   onLogout,
   onDeleteAccount,
   onChangePassword,
-  entries,
-  onDelete,
-  onUpdate,
-  pendingSync,
-  getCategoryById,
-  colorMap,
   incomeCategories,
   expenseCategories,
   investmentCategories = [],
-  allCategories,
   customCats,
   onCreateCategory,
   onDeleteCategory,
   onCreate,
-  onAddMember,
+  onInvite,
+  onAcceptInvitation,
+  onRejectInvitation,
+  onCancelInvitation,
   onRemoveMember,
   onLeave,
   onDeleteHousehold,
   onRename,
-  openAddMember,
-  setOpenAddMember,
+  pendingInvitations = [],
   onUpdateProfile,
   currencyList = [],
+  currenciesLoading = false,
+  onCurrencyPickerOpen,
 }) {
   const { isDark, toggleTheme, colors: C, styles: S } = useTheme();
   const [view, setView]         = useState("account"); // "account" | "history" | "categories" | "household"
+  const { feedback, flash }     = useFeedback();
+
   const [section, setSection]   = useState(null);
   const [currentPw, setCurrentPw]   = useState("");
   const [newPw, setNewPw]           = useState("");
   const [confirmPw, setConfirmPw]   = useState("");
   const [deletePw, setDeletePw]     = useState("");
   const [loading, setLoading]       = useState(false);
-  const [feedback, setFeedback]     = useState(null);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   // Notification preferences
   const [notifEnabled, setNotifEnabled]       = useState(user?.notificationsEnabled ?? false);
@@ -109,13 +111,6 @@ export function AccountScreen({
     return () => handler.remove();
   }, [view]);
 
-  // Handle openAddMember flag from parent
-  useEffect(() => {
-    if (openAddMember && household) {
-      setView("household");
-      setOpenAddMember?.(false);
-    }
-  }, [openAddMember, household, setOpenAddMember]);
 
   // Sync drafts when user prop changes
   useEffect(() => {
@@ -123,11 +118,8 @@ export function AccountScreen({
     setEmailDraft(user?.email || "");
   }, [user?.name, user?.email]);
 
-  function flash(ok, msg) { setFeedback({ ok, msg }); if (ok) setTimeout(() => setFeedback(null), 2500); }
-
   function toggleSection(name) {
     setSection(s => s === name ? null : name);
-    setFeedback(null);
   }
 
   async function handleSaveProfile() {
@@ -168,8 +160,6 @@ export function AccountScreen({
   }
 
   async function handleSaveNotifications() {
-    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (!timeRegex.test(notifTime)) return flash(false, "Time must be in HH:mm format (e.g. 20:00).");
     const customDaysNum = parseInt(notifCustomDays, 10);
     if (notifFrequency === "custom" && (isNaN(customDaysNum) || customDaysNum < 1)) {
       return flash(false, "Custom days must be a number \u2265 1.");
@@ -252,26 +242,6 @@ export function AccountScreen({
 
   // ── Sub-view renders ──
 
-  if (view === "history") {
-    return (
-      <View style={{ flex: 1 }}>
-        <SubScreenHeader title="History" onBack={() => setView("account")} />
-        <HistoryScreen
-          entries={entries}
-          onDelete={onDelete}
-          onUpdate={onUpdate}
-          household={household}
-          getCategoryById={getCategoryById}
-          colorMap={colorMap}
-          incomeCategories={incomeCategories}
-          expenseCategories={expenseCategories}
-          allCategories={allCategories}
-          pendingSync={pendingSync}
-        />
-      </View>
-    );
-  }
-
   if (view === "categories") {
     return (
       <View style={{ flex: 1 }}>
@@ -296,12 +266,13 @@ export function AccountScreen({
           household={household}
           user={user}
           onCreate={onCreate}
-          onAddMember={onAddMember}
+          onInvite={onInvite}
+          onCancelInvitation={onCancelInvitation}
           onRemoveMember={onRemoveMember}
           onLeave={onLeave}
           onDelete={onDeleteHousehold}
           onRename={onRename}
-          autoOpenAddMember={openAddMember}
+          autoOpenInvite={false}
         />
       </View>
     );
@@ -310,10 +281,46 @@ export function AccountScreen({
   // ── Main account view ──
 
   return (
+    <View style={{ flex: 1 }}>
     <ScrollView style={S.screen} contentContainerStyle={{ paddingBottom: 48 }} keyboardShouldPersistTaps="handled">
       <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
 
         <Text style={[S.h2, { marginBottom: 20 }]}>Account</Text>
+
+        {/* Household fetch error */}
+        {householdError && (
+          <View style={{ marginBottom: 12, padding: 12, borderRadius: 10, backgroundColor: "#FEECEC", borderWidth: 0.5, borderColor: "#F5C2C2" }}>
+            <Text style={{ fontSize: 13, color: "#C62828" }}>Could not load household data: {String(householdError)}</Text>
+          </View>
+        )}
+
+        {/* Pending invitations — always visible at the top */}
+        {pendingInvitations.length > 0 && (
+          <View style={{ marginBottom: 20 }}>
+            <Text style={[S.label, { marginBottom: 8 }]}>Pending invitations</Text>
+            {pendingInvitations.map(inv => (
+              <View key={inv.invitationId}
+                style={[S.card, { marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={[S.body, { fontWeight: "600" }]}>{inv.householdName}</Text>
+                  <Text style={S.small}>Invited by {inv.invitedByName}</Text>
+                </View>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TouchableOpacity
+                    style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: C.green }}
+                    onPress={async () => { try { await onAcceptInvitation(inv.invitationId); } catch (e) { flash(false, e.message); } }}>
+                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>Accept</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 0.5, borderColor: C.border, backgroundColor: C.bgSecondary }}
+                    onPress={async () => { try { await onRejectInvitation(inv.invitationId); } catch (e) { flash(false, e.message); } }}>
+                    <Text style={{ fontSize: 13, color: C.textSecondary }}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* User info card */}
         <View style={[S.card, { marginBottom: 20 }]}>
@@ -326,7 +333,7 @@ export function AccountScreen({
               <Text style={S.small}>{user?.email}</Text>
                   {household && (
                 <Text style={{ fontSize: 12, color: C.greenDark, marginTop: 3 }}>
-                  🏠 {household.name} · {household.ownerId === user?.userId ? "Owner" : "Member"}
+                  🏠 {household.name} · {user?.householdRole === "OWNER" ? "Owner" : "Member"}
                 </Text>
               )}
             </View>
@@ -369,8 +376,6 @@ export function AccountScreen({
           )}
         </View>
 
-        <FeedbackBanner feedback={feedback} />
-
         {/* Dark Mode */}
         <View style={[S.card, { marginBottom: 12 }]}>
           <View style={[S.rowBetween, { marginBottom: 4 }]}>
@@ -390,7 +395,6 @@ export function AccountScreen({
 
         {/* Navigation cards */}
         <Text style={[S.sectionTitle, { marginTop: 12, marginBottom: 12 }]}>More</Text>
-        <NavCard emoji="📋" label="History"    onPress={() => setView("history")} />
         <NavCard emoji="🏷️" label="Categories" onPress={() => setView("categories")} />
         <NavCard emoji="🏠" label="Household"  onPress={() => setView("household")} />
 
@@ -398,7 +402,7 @@ export function AccountScreen({
 
         {/* Display Currency */}
         <View style={[S.card, { marginBottom: 12 }]}>
-          <TouchableOpacity style={S.rowBetween} onPress={() => setShowCurrencyPicker(true)}>
+          <TouchableOpacity style={S.rowBetween} onPress={() => { onCurrencyPickerOpen?.(); setShowCurrencyPicker(true); }}>
             <View style={S.row}>
               <Text style={{ fontSize: 18, marginRight: 12 }}>💱</Text>
               <Text style={S.body}>Display Currency</Text>
@@ -410,6 +414,7 @@ export function AccountScreen({
             visible={showCurrencyPicker}
             selected={user?.currency}
             currencyList={currencyList}
+            loading={currenciesLoading}
             onSelect={async (code) => {
               setShowCurrencyPicker(false);
               if (code === user?.currency) return;
@@ -498,15 +503,21 @@ export function AccountScreen({
                     </View>
                   )}
 
-                  {/* Time input */}
-                  <Text style={[S.label, { marginBottom: 5 }]}>Reminder time (HH:mm)</Text>
-                  <TextInput
-                    style={S.input}
+                  {/* Time picker */}
+                  <Text style={[S.label, { marginBottom: 5 }]}>Reminder time</Text>
+                  <TouchableOpacity
+                    style={[S.input, { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }]}
+                    onPress={() => setShowTimePicker(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 15, color: C.text }}>{notifTime}</Text>
+                    <Text style={{ fontSize: 16, color: C.textTertiary }}>🕐</Text>
+                  </TouchableOpacity>
+                  <TimePicker
+                    visible={showTimePicker}
                     value={notifTime}
-                    onChangeText={setNotifTime}
-                    placeholder="20:00"
-                    placeholderTextColor={C.textTertiary}
-                    keyboardType="numeric"
+                    onChange={(t) => { setNotifTime(t); setShowTimePicker(false); }}
+                    onClose={() => setShowTimePicker(false)}
                   />
                 </>
               )}
@@ -531,24 +542,14 @@ export function AccountScreen({
             </View>
             <Text style={{ color: C.textTertiary, fontSize: 18 }}>{section === "serverUrl" ? "−" : "+"}</Text>
           </TouchableOpacity>
-          <Text style={[S.small, { marginLeft: 30, marginTop: 4 }]} numberOfLines={1}>{serverUrl}</Text>
-          {section === "serverUrl" && (
-            <View style={{ marginTop: 14 }}>
-              <Text style={[S.label, { marginBottom: 5 }]}>Backend URL</Text>
-              <TextInput
-                style={S.input}
-                value={serverUrlDraft}
-                onChangeText={setServerUrlDraft}
-                placeholder={DEFAULT_URL}
-                placeholderTextColor={C.textTertiary}
-                autoCapitalize="none"
-                keyboardType="url"
-              />
-              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={handleSaveServerUrl}>
-                <Text style={S.btnPrimaryText}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          <ServerUrlEditor
+            visible={section === "serverUrl"}
+            draft={serverUrlDraft}
+            onChangeDraft={setServerUrlDraft}
+            onSave={handleSaveServerUrl}
+            currentUrl={serverUrl}
+            placeholder={DEFAULT_URL}
+          />
         </View>
 
         {/* Biometric Login */}
@@ -652,5 +653,7 @@ export function AccountScreen({
 
       </View>
     </ScrollView>
+    <FeedbackBanner feedback={feedback} />
+    </View>
   );
 }

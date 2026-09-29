@@ -1,16 +1,26 @@
 import { useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
 import { MONTH_SHORT, MONTH_LABELS } from "../../src/utils/theme.js";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import { FinancialPillRow } from "../../src/components/FinancialPillRow.jsx";
 import { NecessityBreakdown } from "../../src/components/NecessityBreakdown.jsx";
 import { MemberBreakdown } from "../../src/components/MemberBreakdown.jsx";
 import { formatCurrency } from "../../src/utils/enums.js";
+import { useMonthEntries } from "../../src/utils/useMonthEntries.js";
 
-export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilterMonth, household, getCategoryById, colorMap, showPersonalOnly, userCurrency }) {
+const CACHE_PREFIX = "moni_entries_cache_";
+
+export function MonthOverviewScreen({ filterMonth, setFilterMonth, household, getCategoryById, colorMap, showPersonalOnly, userCurrency, pendingSync }) {
   const { colors: C, styles: S } = useTheme();
   const currency = userCurrency || "EUR";
   const fmtAmt = (val) => formatCurrency(val, currency);
+  const showHousehold = !!household && !showPersonalOnly;
+
+  const { monthsData, monthCache } = useMonthEntries(CACHE_PREFIX, showHousehold, filterMonth);
+
+  const currentData = monthCache[filterMonth] ?? { entries: [], loading: true, error: null };
+  const entries     = currentData.entries;
+  const loading     = currentData.loading;
 
   const totals = useMemo(() => {
     const income     = entries.filter(e => e.type === "income").reduce((s,e)     => s + e.amount, 0);
@@ -21,20 +31,15 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
 
   const necessityTotals = useMemo(() => {
     const expenses = entries.filter(e => e.type === "expense");
-    const necessary = expenses.filter(e => {
-      const n = e.necessity?.toLowerCase?.();
-      return n === "necessary" || n === "need" || !e.necessity;
-    }).reduce((s,e) => s + e.amount, 0);
-    const optional = expenses.filter(e => {
-      const n = e.necessity?.toLowerCase?.();
-      return n === "optional" || n === "want";
-    }).reduce((s,e) => s + e.amount, 0);
-    return { necessary, optional };
+    return {
+      necessary: expenses.filter(e => e.necessity === "necessary").reduce((s,e) => s + e.amount, 0),
+      optional:  expenses.filter(e => e.necessity === "optional").reduce((s,e) => s + e.amount, 0),
+    };
   }, [entries]);
 
   const catTotals = useMemo(() => {
     const map = {};
-    entries.forEach(e => { map[e.category] = (map[e.category] || 0) + e.amount; });
+    entries.forEach(e => { if (e.categoryId) map[e.categoryId] = (map[e.categoryId] || 0) + e.amount; });
     return Object.entries(map).sort((a,b) => b[1]-a[1]).slice(0, 10);
   }, [entries]);
 
@@ -43,23 +48,13 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
     const map = {};
     entries.forEach(e => {
       if (!e.authorName) return;
-      if (!map[e.authorName]) map[e.authorName] = { income: 0, expense: 0 };
-      if (e.type === "income" || e.type === "expense") map[e.authorName][e.type] += e.amount;
+      if (!map[e.authorName]) map[e.authorName] = { income: 0, expense: 0, invested: 0 };
+      if (e.type === "income")     map[e.authorName].income   += e.amount;
+      if (e.type === "expense")    map[e.authorName].expense  += e.amount;
+      if (e.type === "investment") map[e.authorName].invested += e.amount;
     });
     return Object.entries(map);
   }, [entries, household]);
-
-  const monthsData = useMemo(() => {
-    const keys = new Set();
-    allEntries.forEach(e => { if (e.date) keys.add(e.date.slice(0, 7)); });
-    keys.add(new Date().toISOString().slice(0, 7));
-    return Array.from(keys)
-      .sort((a, b) => b.localeCompare(a))
-      .map(key => {
-        const d = new Date(key + "-01");
-        return { key, month: d.getMonth(), year: d.getFullYear() };
-      });
-  }, [allEntries]);
 
   const selectedMonthLabel = useMemo(() => {
     const d = new Date(filterMonth + "-01");
@@ -79,11 +74,7 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
 
       {/* Month scroller */}
       <View style={{ paddingBottom: 20 }}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 10 }}
-        >
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 10 }}>
           {monthsData.map(({ key, month, year }) => {
             const isActive = key === filterMonth;
             return (
@@ -91,12 +82,9 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
                 key={key}
                 onPress={() => setFilterMonth(key)}
                 style={{
-                  paddingHorizontal: 18,
-                  paddingVertical: 12,
-                  borderRadius: 10,
+                  paddingHorizontal: 18, paddingVertical: 12, borderRadius: 10,
                   backgroundColor: isActive ? C.green : C.cardBg,
-                  marginHorizontal: 4,
-                  borderWidth: 0.5,
+                  marginHorizontal: 4, borderWidth: 0.5,
                   borderColor: isActive ? C.green : C.border,
                 }}
               >
@@ -112,6 +100,21 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
         </ScrollView>
       </View>
 
+      {loading && !entries.length && (
+        <View style={{ alignItems: "center", paddingVertical: 40 }}>
+          <ActivityIndicator color={C.green} />
+        </View>
+      )}
+
+      {/* Pending sync indicator */}
+      {pendingSync?.size > 0 && (
+        <View style={{ marginBottom: 10, paddingHorizontal: 4, alignSelf: "flex-start" }}>
+          <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: "#FFF3CD", borderWidth: 0.5, borderColor: "#FAC775" }}>
+            <Text style={{ fontSize: 11, color: "#854F0B", fontWeight: "600" }}>{pendingSync.size} PENDING SYNC</Text>
+          </View>
+        </View>
+      )}
+
       {/* Balance */}
       <View style={{ alignItems: "center", paddingVertical: 28 }}>
         <Text style={[S.label, { marginBottom: 6 }]}>Balance</Text>
@@ -119,26 +122,18 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
       </View>
 
       {/* Pills */}
-      <FinancialPillRow
-        income={totals.income}
-        expense={totals.expense}
-        investment={totals.investment}
-        currency={currency}
-        style={{ marginBottom: 16 }}
-      />
+      <FinancialPillRow income={totals.income} expense={totals.expense} investment={totals.investment} currency={currency} style={{ marginBottom: 16 }} />
 
       {/* Summary bars */}
       <View style={{ marginBottom: 24 }}>
         <Text style={S.sectionTitle}>Summary</Text>
         {(() => {
           const maxAmount  = Math.max(totals.income, totals.expense, totals.investment, 1);
-          const incomePct  = (totals.income / maxAmount) * 100;
-          const expensePct = (totals.expense / maxAmount) * 100;
           return (
             <>
               {[
-                { label: "💰 Income",   pct: incomePct,  val: totals.income,     color: C.green },
-                { label: "💳 Expenses", pct: expensePct, val: totals.expense,    color: C.red   },
+                { label: "💰 Income",   pct: (totals.income / maxAmount) * 100,     val: totals.income,     color: C.green },
+                { label: "💳 Expenses", pct: (totals.expense / maxAmount) * 100,    val: totals.expense,    color: C.red   },
                 ...(totals.investment > 0 ? [{ label: "📈 Invested", pct: (totals.investment / maxAmount) * 100, val: totals.investment, color: C.blue }] : []),
               ].map(({ label, pct, val, color }) => (
                 <View key={label} style={{ marginBottom: 12 }}>
@@ -160,12 +155,7 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
       {totals.expense > 0 && (
         <View style={{ marginBottom: 24 }}>
           <Text style={S.sectionTitle}>Expense breakdown</Text>
-          <NecessityBreakdown
-            necessary={necessityTotals.necessary}
-            optional={necessityTotals.optional}
-            total={totals.expense}
-            currency={currency}
-          />
+          <NecessityBreakdown necessary={necessityTotals.necessary} optional={necessityTotals.optional} total={totals.expense} currency={currency} />
         </View>
       )}
 
@@ -199,7 +189,7 @@ export function MonthOverviewScreen({ entries, allEntries, filterMonth, setFilte
           })}
         </View>
       ) : (
-        <Text style={[S.small, { textAlign: "center", paddingVertical: 40 }]}>No transactions this month</Text>
+        !loading && <Text style={[S.small, { textAlign: "center", paddingVertical: 40 }]}>No transactions this month</Text>
       )}
     </ScrollView>
   );

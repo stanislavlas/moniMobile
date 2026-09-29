@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import { useKeyboardPadding } from "../../src/hooks/useKeyboardPadding.js";
+import { useFeedback } from "../../src/hooks/useFeedback.js";
 import { FeedbackBanner } from "../../src/components/FeedbackBanner.jsx";
 
 const EMOJI_LIST = [
@@ -17,16 +18,16 @@ const EMOJI_LIST = [
   "💰","💳","🏦","📈","🏡","🚗","🚂","⛵","🎡","🎢","🏕️","🗺️",
 ];
 
-export function CategoriesScreen({ incomeCategories, expenseCategories, investmentCategories = [], customCats, onCreateCategory, onDeleteCategory, loading }) {
+export function CategoriesScreen({ incomeCategories, expenseCategories, investmentCategories = [], customCats, onCreateCategory, onDeleteCategory }) {
   const { colors: C, styles: S } = useTheme();
   const keyboardPadding = useKeyboardPadding();
+  const { feedback, flash } = useFeedback();
   const [tab, setTab]               = useState("expense");
   const [showForm, setShowForm]     = useState(false);
   const [label, setLabel]           = useState("");
   const [emoji, setEmoji]           = useState("");
   const [showEmojiModal, setShowEmojiModal] = useState(false);
   const [saving, setSaving]         = useState(false);
-  const [feedback, setFeedback]     = useState(null);
 
   const styles = {
     tabBar:        { flexDirection: "row", backgroundColor: C.bgSecondary, borderRadius: 10, padding: 4, marginBottom: 20 },
@@ -40,11 +41,6 @@ export function CategoriesScreen({ incomeCategories, expenseCategories, investme
     deleteBtn:     { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 0.5, borderColor: C.redBorder },
     builtInBadge:  { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5, backgroundColor: C.bgTertiary },
   };
-
-  function flash(ok, msg) {
-    setFeedback({ ok, msg });
-    if (ok) setTimeout(() => setFeedback(null), 2000);
-  }
 
   async function handleCreate() {
     if (!label.trim()) return flash(false, "Enter a category name.");
@@ -83,9 +79,7 @@ export function CategoriesScreen({ incomeCategories, expenseCategories, investme
       {/* Title */}
       <Text style={[S.h2, { marginBottom: 14 }]}>Categories</Text>
 
-      {feedback && (
-        <FeedbackBanner feedback={feedback} />
-      )}
+      <FeedbackBanner feedback={feedback} />
 
       {/* Tab toggle */}
       <View style={styles.tabBar}>

@@ -43,7 +43,6 @@ jest.mock("../../services/customCategories.js", () => ({
 // Mock household service
 jest.mock("../../services/household.js", () => ({
   syncCreateHousehold: jest.fn(),
-  syncAddMember: jest.fn(),
   syncRemoveMember: jest.fn(),
   syncLeaveHousehold: jest.fn(),
   syncDeleteHousehold: jest.fn(),
@@ -64,7 +63,7 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   // Default: online + valid token
-  Object.defineProperty(syncService, 'networkOnline', { value: true, writable: true });
+  Object.defineProperty(syncService, '_networkOnline', { value: true, writable: true, configurable: true });
 
   queueStorage.loadQueue.mockResolvedValue({ operations: [], lastSyncAttempt: null, lastSuccessfulSync: null });
   queueStorage.getQueueSummary.mockResolvedValue({ total: 0, pending: 0, syncing: 0, failed: 0 });

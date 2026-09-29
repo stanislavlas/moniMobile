@@ -102,7 +102,3 @@ class Logger {
 
 export const logger = new Logger();
 
-// Export convenience function to enable/disable logs at runtime
-export function setLoggingEnabled(enabled) {
-  logger.enabled = enabled;
-}

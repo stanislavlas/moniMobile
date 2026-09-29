@@ -1,9 +1,9 @@
 // mobile/src/components/CurrencyPicker.jsx
 import { useState } from "react";
-import { Modal, View, Text, TextInput, FlatList, TouchableOpacity } from "react-native";
+import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, ActivityIndicator } from "react-native";
 import { useTheme } from "../contexts/ThemeContext.js";
 
-export function CurrencyPicker({ visible, selected, currencyList, onSelect, onClose }) {
+export function CurrencyPicker({ visible, selected, currencyList, loading, onSelect, onClose }) {
   const { colors: C, styles: S } = useTheme();
   const [search, setSearch] = useState("");
 
@@ -41,34 +41,42 @@ export function CurrencyPicker({ visible, selected, currencyList, onSelect, onCl
           />
         </View>
 
-        {/* List */}
-        <FlatList
-          data={filtered}
-          keyExtractor={({ code }) => code}
-          renderItem={({ item: { code, name } }) => {
-            const active = code === selected;
-            return (
-              <TouchableOpacity
-                style={{
-                  paddingHorizontal: 20, paddingVertical: 14,
-                  borderBottomWidth: 0.5, borderBottomColor: C.border,
-                  backgroundColor: active ? C.greenLight : C.bg,
-                  flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-                }}
-                onPress={() => { onSelect(code); setSearch(""); onClose(); }}
-              >
-                <Text style={{ fontSize: 15, fontWeight: "600", color: active ? C.greenDark : C.text, width: 48 }}>
-                  {code}
-                </Text>
-                <Text style={{ fontSize: 13, color: active ? C.greenDark : C.textSecondary, flex: 1, marginLeft: 8 }}>
-                  {name}
-                </Text>
-                {active && <Text style={{ color: C.green, fontSize: 16 }}>✓</Text>}
-              </TouchableOpacity>
-            );
-          }}
-          keyboardShouldPersistTaps="handled"
-        />
+        {/* Loading state */}
+        {loading ? (
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+            <ActivityIndicator size="large" color={C.green} />
+            <Text style={{ marginTop: 12, fontSize: 14, color: C.textSecondary }}>Loading currencies...</Text>
+          </View>
+        ) : (
+          /* List */
+          <FlatList
+            data={filtered}
+            keyExtractor={({ code }) => code}
+            renderItem={({ item: { code, name } }) => {
+              const active = code === selected;
+              return (
+                <TouchableOpacity
+                  style={{
+                    paddingHorizontal: 20, paddingVertical: 14,
+                    borderBottomWidth: 0.5, borderBottomColor: C.border,
+                    backgroundColor: active ? C.greenLight : C.bg,
+                    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+                  }}
+                  onPress={() => { onSelect(code); setSearch(""); onClose(); }}
+                >
+                  <Text style={{ fontSize: 15, fontWeight: "600", color: active ? C.greenDark : C.text, width: 48 }}>
+                    {code}
+                  </Text>
+                  <Text style={{ fontSize: 13, color: active ? C.greenDark : C.textSecondary, flex: 1, marginLeft: 8 }}>
+                    {name}
+                  </Text>
+                  {active && <Text style={{ color: C.green, fontSize: 16 }}>✓</Text>}
+                </TouchableOpacity>
+              );
+            }}
+            keyboardShouldPersistTaps="handled"
+          />
+        )}
       </View>
     </Modal>
   );

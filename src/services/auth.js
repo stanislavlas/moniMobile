@@ -7,13 +7,13 @@ import * as SecureStore from "expo-secure-store";
 import { decode as base64Decode } from "base-64";
 import { logger } from "../utils/logger.js";
 import { getServerUrl } from "./serverUrl.js";
+import { authEvents } from "../utils/authEvents.js";
 
 logger.auth('Auth Service initialized');
-logger.auth('Platform: ' + require('react-native').Platform.OS);
-const KEY_ACCESS          = "budget_access_token";
-const KEY_REFRESH         = "budget_refresh_token";
-const KEY_USER            = "budget_user";
-export const KEY_BIOMETRIC_CREDENTIALS = "budget_biometric_credentials_secure";
+const KEY_ACCESS          = "moni_access_token";
+const KEY_REFRESH         = "moni_refresh_token";
+const KEY_USER            = "moni_user";
+export const KEY_BIOMETRIC_CREDENTIALS = "moni_biometric_credentials_secure";
 
 export async function getAccessToken()  { return AsyncStorage.getItem(KEY_ACCESS); }
 export async function getRefreshToken() { return AsyncStorage.getItem(KEY_REFRESH); }
@@ -63,6 +63,7 @@ export async function authRequest(path, options = {}, timeoutMs = 0) {
       ) {
         throw Object.assign(new Error("Network request failed"), { code: "NETWORK_REQUEST_FAILED" });
       }
+      authEvents.emit("expired");
       throw Object.assign(new Error("Session expired. Please log in again."), { code: "AUTH_EXPIRED" });
     }
   }
@@ -81,6 +82,7 @@ export async function authRequest(path, options = {}, timeoutMs = 0) {
 
     if (res.status === 401) {
       await clearTokens();
+      authEvents.emit("expired");
       throw Object.assign(new Error("Session expired. Please log in again."), { code: "AUTH_EXPIRED" });
     }
     if (!res.ok) {
@@ -105,22 +107,12 @@ export async function register({ name, email, password, currency }) {
   const url = `${API_BASE}/api/auth/create`;
   const payload = { name, email, password, currency: currency || "EUR" };
 
-  logger.section('REGISTER START');
-  logger.api('Timestamp: ' + new Date().toISOString());
-  logger.api('URL: ' + url);
-  logger.api('Payload', { ...payload, password: '***' });
+  logger.auth('Register: ' + email);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
 
   try {
-    logger.api('Starting fetch request...');
-    const fetchStartTime = Date.now();
-
-    // Add a timeout to detect hanging requests
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      logger.warn('api', 'Request timeout triggered (10s)');
-      controller.abort();
-    }, 10000); // 10 second timeout
-
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -129,32 +121,20 @@ export async function register({ name, email, password, currency }) {
     });
 
     clearTimeout(timeoutId);
-    const fetchDuration = Date.now() - fetchStartTime;
-
-    logger.api('Response received in: ' + fetchDuration + 'ms');
-    logger.api('Response status: ' + res.status);
-
     const data = await res.json();
 
     if (!res.ok) {
-      logger.error('api', 'Response not OK, throwing error');
       throw new Error(data.error || data.message || "Registration failed");
     }
 
-    logger.section('REGISTER SUCCESS - pending verification');
-    // Return the pending verification response so the UI can show OTP entry
+    logger.auth('Register success — pending verification');
     return data;
   } catch (error) {
-    logger.section('REGISTER ERROR');
-    logger.error('auth', 'Error caught: ' + error.name, error.message);
+    clearTimeout(timeoutId);
+    logger.error('auth', 'Register error: ' + error.name, error.message);
 
     if (error.name === 'AbortError') {
-      logger.error('auth', 'Request was aborted (timeout)');
       throw new Error('Connection timeout - cannot reach server at ' + await getServerUrl());
-    }
-
-    if (error.name === 'TypeError' && error.message.includes('Network request failed')) {
-      logger.error('auth', 'Network request failed - check backend is running, IP/port is correct, and emulator network is configured');
     }
 
     throw error;
@@ -213,8 +193,7 @@ export async function resetPassword(code, newPassword) {
 export async function login({ email, password }) {
   const API_BASE = await getServerUrl();
   const url = `${API_BASE}/api/auth/login`;
-  logger.section('LOGIN START');
-  logger.api('Email: ' + email);
+  logger.auth('Login: ' + email);
 
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => controller.abort(), 10000);
@@ -229,12 +208,11 @@ export async function login({ email, password }) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Login failed");
     await storeTokens(data);
-    logger.section('LOGIN SUCCESS');
+    logger.auth('Login success');
     return data.user;
   } catch (error) {
     clearTimeout(timeoutId);
-    logger.section('LOGIN ERROR');
-    logger.error('auth', error.name + ': ' + error.message);
+    logger.error('auth', 'Login error: ' + error.name, error.message);
     if (error.name === 'AbortError') throw new Error('Cannot reach server. Please check your connection.');
     throw error;
   }
@@ -314,8 +292,8 @@ export async function refreshAccessToken() {
       body: JSON.stringify({ refreshToken }),
       signal: controller.signal,
     });
+    if (!res.ok) { await clearTokens(); authEvents.emit("expired"); throw Object.assign(new Error("Session expired"), { code: "AUTH_EXPIRED" }); }
     const data = await res.json();
-    if (!res.ok) { await clearTokens(); throw Object.assign(new Error("Session expired"), { code: "AUTH_EXPIRED" }); }
     await AsyncStorage.multiSet([
       [KEY_ACCESS,  data.accessToken],
       [KEY_REFRESH, data.refreshToken],
@@ -330,6 +308,15 @@ export async function deleteAccount(password) {
   await authRequest("/api/auth/account", { method: "DELETE", body: JSON.stringify({ password }) });
   await clearTokens();
   await clearBiometricCredentials();
+}
+
+export async function getProfile() {
+  const data = await authRequest("/api/user");
+  // Merge and persist to AsyncStorage
+  const existing = await getStoredUser();
+  const updated = { ...existing, ...data };
+  await AsyncStorage.setItem(KEY_USER, JSON.stringify(updated));
+  return updated;
 }
 
 export async function updateProfile(patch) {
@@ -351,13 +338,6 @@ export async function changePassword({ currentPassword, newPassword }) {
   // user is prompted to re-enroll biometrics with the new password on next login.
   await clearBiometricCredentials();
   return result;
-}
-
-/**
- * Update user profile
- */
-export async function updateUserProfile(updates) {
-  return authRequest("/api/auth/profile", { method: "PUT", body: JSON.stringify(updates) });
 }
 
 // --- Biometric-specific auth functions ---

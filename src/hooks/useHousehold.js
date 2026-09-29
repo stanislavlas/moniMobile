@@ -1,11 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getMyHousehold, getPendingInvitations } from "../services/household.js";
+import {
+  getMyHousehold,
+  getPendingInvitations,
+  sendInvitation as apiSendInvitation,
+  acceptInvitation as apiAcceptInvitation,
+  rejectInvitation as apiRejectInvitation,
+  cancelInvitation as apiCancelInvitation,
+} from "../services/household.js";
 import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 import syncService from "../services/syncService.js";
 
-const CACHE_KEY       = "budget_cache_household";
-const INVITATIONS_KEY = "budget_cache_pending_invitations";
+const CACHE_KEY       = "moni_cache_household";
+const INVITATIONS_KEY = "moni_cache_pending_invitations";
 
 async function loadCache(key)      { try { return JSON.parse(await AsyncStorage.getItem(key) || "null"); } catch { return null; } }
 async function saveCache(key, val) { try { if (val != null) await AsyncStorage.setItem(key, JSON.stringify(val)); else await AsyncStorage.removeItem(key); } catch {} }
@@ -42,7 +49,7 @@ async function notifyNewInvitations(newInvitations, seenIds) {
           title: "Household invitation",
           body: `${inv.invitedByName} invited you to join "${inv.householdName}"`,
         },
-        trigger: null, // fire immediately
+        trigger: null,
       });
     }
   } catch {
@@ -55,9 +62,7 @@ export function useHousehold(isAuthenticated) {
   const [pendingInvitations, setPending]    = useState([]);
   const [loading,            setLoading]    = useState(true);
   const [error,              setError]      = useState(null);
-  const [pendingSync,        setPendingSync] = useState(false);
 
-  // Track which invitation IDs have already triggered a notification this session
   const notifiedIds = useRef(new Set());
 
   const fetch = useCallback(async () => {
@@ -76,9 +81,9 @@ export function useHousehold(isAuthenticated) {
         getMyHousehold().catch(err => { if (err.code === "AUTH_EXPIRED") throw err; return null; }),
         getPendingInvitations().catch(() => []),
       ]);
-      if (hh !== null) { setHousehold(hh); saveCache(CACHE_KEY, hh); }
+      setHousehold(hh ?? null);
+      saveCache(CACHE_KEY, hh ?? null);
 
-      // Notify for any invitations not yet seen this session
       await notifyNewInvitations(invitations, notifiedIds.current);
       invitations.forEach(i => notifiedIds.current.add(i.invitationId));
 
@@ -86,7 +91,8 @@ export function useHousehold(isAuthenticated) {
       saveCache(INVITATIONS_KEY, invitations);
     } catch (err) {
       if (err.code === "AUTH_EXPIRED") throw err;
-      // other errors: swallow — cached state is already shown
+      // Surface network/server errors to the caller instead of swallowing them
+      setError(err.message ?? "Failed to load household data");
     }
   }, [isAuthenticated]);
 
@@ -96,7 +102,6 @@ export function useHousehold(isAuthenticated) {
   useEffect(() => {
     const handleSyncComplete = ({ syncedOperations = [] }) => {
       if (syncedOperations.some(op => op.type?.startsWith('household.'))) {
-        setPendingSync(false);
         fetch();
       }
     };
@@ -104,117 +109,86 @@ export function useHousehold(isAuthenticated) {
     return () => syncService.removeEventListener('syncComplete', handleSyncComplete);
   }, [fetch]);
 
+  // All mutating operations: enqueue and then refresh from server (no optimistic state)
   const createHousehold = useCallback(async (name) => {
-    const previous = household;
-    const previousCache = await loadCache(CACHE_KEY);
-    const optimistic = { name, members: [], pendingSync: true };
-    setHousehold(optimistic); saveCache(CACHE_KEY, optimistic); setPendingSync(true);
+    setError(null);
     try {
       await enqueueAndSync("household.create", { name });
     } catch (err) {
-      // Roll back optimistic update
-      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
-      setPendingSync(false);
       setError(err.message ?? "Failed to create household");
       throw err;
     }
-  }, [household]);
+  }, []);
 
   const sendInvitation = useCallback(async (email) => {
-    const { sendInvitation: svc } = await import("../services/household.js");
-    return svc(email);
+    return apiSendInvitation(email);
   }, []);
 
   const acceptInvitation = useCallback(async (invitationId) => {
-    const { acceptInvitation: svc } = await import("../services/household.js");
-    const result = await svc(invitationId);
+    const result = await apiAcceptInvitation(invitationId);
     setPending(prev => prev.filter(i => i.invitationId !== invitationId));
-    await fetch(); // reload household now that we've joined
+    await fetch();
     return result;
   }, [fetch]);
 
   const rejectInvitation = useCallback(async (invitationId) => {
-    const { rejectInvitation: svc } = await import("../services/household.js");
-    await svc(invitationId);
+    await apiRejectInvitation(invitationId);
     setPending(prev => prev.filter(i => i.invitationId !== invitationId));
   }, []);
 
   const cancelInvitation = useCallback(async (invitationId) => {
-    const { cancelInvitation: svc } = await import("../services/household.js");
-    return svc(invitationId);
+    return apiCancelInvitation(invitationId);
   }, []);
 
   const removeMember = useCallback(async (memberId) => {
-    const previous = household;
-    const previousCache = await loadCache(CACHE_KEY);
-    setHousehold(prev => {
-      if (!prev) return prev;
-      const updated = { ...prev, members: prev.members?.filter(m => m.userId !== memberId) || [], pendingSync: true };
-      saveCache(CACHE_KEY, updated); return updated;
-    });
-    setPendingSync(true);
+    setError(null);
     try {
       await enqueueAndSync("household.removeMember", { memberId });
     } catch (err) {
-      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
-      setPendingSync(false);
       setError(err.message ?? "Failed to remove member");
       throw err;
     }
-  }, [household]);
+  }, []);
 
   const leaveHousehold = useCallback(async () => {
-    const previous = household;
-    const previousCache = await loadCache(CACHE_KEY);
-    setHousehold(null); saveCache(CACHE_KEY, null); setPendingSync(true);
+    setError(null);
     try {
       await enqueueAndSync("household.leave", {});
+      setHousehold(null);
+      saveCache(CACHE_KEY, null);
     } catch (err) {
-      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
-      setPendingSync(false);
       setError(err.message ?? "Failed to leave household");
       throw err;
     }
-  }, [household]);
+  }, []);
 
   const deleteHousehold = useCallback(async () => {
-    const previous = household;
-    const previousCache = await loadCache(CACHE_KEY);
-    setHousehold(null); saveCache(CACHE_KEY, null); setPendingSync(true);
+    setError(null);
     try {
       await enqueueAndSync("household.delete", {});
+      setHousehold(null);
+      saveCache(CACHE_KEY, null);
     } catch (err) {
-      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
-      setPendingSync(false);
       setError(err.message ?? "Failed to delete household");
       throw err;
     }
-  }, [household]);
+  }, []);
 
   const renameHousehold = useCallback(async (name) => {
-    const previous = household;
-    const previousCache = await loadCache(CACHE_KEY);
-    setHousehold(prev => {
-      if (!prev) return prev;
-      const updated = { ...prev, name, pendingSync: true };
-      saveCache(CACHE_KEY, updated); return updated;
-    });
-    setPendingSync(true);
+    setError(null);
     try {
       await enqueueAndSync("household.rename", { name });
     } catch (err) {
-      setHousehold(previous); saveCache(CACHE_KEY, previousCache);
-      setPendingSync(false);
       setError(err.message ?? "Failed to rename household");
       throw err;
     }
-  }, [household]);
+  }, []);
 
   return {
     household, pendingInvitations,
     pendingCount: pendingInvitations.length,
     loading, error, refresh: fetch,
     createHousehold, sendInvitation, acceptInvitation, rejectInvitation, cancelInvitation,
-    removeMember, leaveHousehold, deleteHousehold, renameHousehold, pendingSync,
+    removeMember, leaveHousehold, deleteHousehold, renameHousehold,
   };
 }

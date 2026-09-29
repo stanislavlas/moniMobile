@@ -1,7 +1,7 @@
 import "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useState, useEffect, useCallback } from "react";
-import { View, Text, TouchableOpacity, StatusBar, ActivityIndicator, Modal } from "react-native";
+import { View, Text, Image, TouchableOpacity, StatusBar, ActivityIndicator, Modal, ToastAndroid } from "react-native";
 import { useAuth }         from "./src/hooks/useAuth.js";
 import { useEntries }      from "./src/hooks/useEntries.js";
 import { useHousehold }    from "./src/hooks/useHousehold.js";
@@ -17,9 +17,8 @@ import { YearOverviewScreen }  from "./app/screens/YearOverviewScreen.jsx";
 import { AddScreen }         from "./app/screens/AddScreen.jsx";
 import { AccountScreen }     from "./app/screens/AccountScreen.jsx";
 import { HistoryScreen }     from "./app/screens/HistoryScreen.jsx";
-import { authenticateWithBiometric } from "./src/services/biometric.js"; // used in biometric enroll modal
+import { authenticateWithBiometric } from "./src/services/biometric.js";
 import { applyNotificationPreferences } from "./src/services/notifications.js";
-import { AUTH_POLL_INTERVAL_MS } from "./src/utils/constants.js";
 
 const TABS = [
   { id: "month",   label: "Month",   icon: "month" },
@@ -48,40 +47,19 @@ function AppContent() {
   const auth = useAuth();
   const { user, isAuthenticated, ready, loading: authLoading, error: authError, clearError, login, register, logout, deleteAccount, changePassword, updateProfile, loginWithBiometric, pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll, pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification } = auth;
 
-  // Handle session expiration globally
-  useEffect(() => {
-    let logoutFired = false;
-    const checkAuth = async () => {
-      if (logoutFired) return;
-      const { getAccessToken, getRefreshToken } = await import("./src/services/auth.js");
-      const [access, refresh] = await Promise.all([getAccessToken(), getRefreshToken()]);
-      if (!access && !refresh && isAuthenticated) {
-        // Tokens were cleared but user is still set - session expired
-        logoutFired = true;
-        logout();
-      }
-    };
-
-    if (isAuthenticated) {
-      const interval = setInterval(checkAuth, AUTH_POLL_INTERVAL_MS);
-      return () => clearInterval(interval);
-    }
-  }, [isAuthenticated, logout]);
-
   const [tab, setTab]               = useState("month");
-  const [accountKey, setAccountKey] = useState(0);
-  const [filterMonth, setFilterMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [filterMonth, setFilterMonth] = useState(() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; });
   const [showPersonalOnly, setShowPersonalOnly] = useState(false); // Toggle for personal vs household view
 
   const {
     household, pendingInvitations, pendingCount,
+    error: householdError,
     createHousehold, sendInvitation, acceptInvitation, rejectInvitation, cancelInvitation,
     removeMember, leaveHousehold, deleteHousehold, renameHousehold,
   } = useHousehold(isAuthenticated);
-  const householdId = household?.householdId || null;
-
-  // Check if user is household owner
-  const isHouseholdOwner = household?.ownerId === user?.userId;
+  // Prefer householdId from the user object (available immediately on rehydration) with
+  // the full household object as fallback once it loads from the server.
+  const householdId = user?.householdId || household?.householdId || null;
 
   // Reset to default tab on logout
   useEffect(() => {
@@ -90,14 +68,14 @@ function AppContent() {
     }
   }, [isAuthenticated]);
 
-  const { currencyList, load: loadCurrencies } = useCurrencies();
+  const { currencyList, loading: currenciesLoading, load: loadCurrencies } = useCurrencies();
 
   // Show household entries when user is in a household and hasn't toggled to personal
   const showHousehold = !!householdId && !showPersonalOnly;
 
-  const { entries, allEntries, loading: entriesLoading, error: entriesError, addEntry, updateEntry, removeEntry, pendingSync, refreshAll } = useEntries(filterMonth, isAuthenticated, showHousehold);
+  const { addEntry, updateEntry, removeEntry, pendingSync, refreshAll } = useEntries();
 
-  const { incomeCategories, expenseCategories, investmentCategories, allCategories, customCats, colorMap, getCategoryById, createCategory, deleteCategory } = useCategories(isAuthenticated);
+  const { incomeCategories, expenseCategories, investmentCategories, allCategories, customCats, colorMap, getCategoryById, createCategory, deleteCategory } = useCategories(isAuthenticated, householdId);
 
   // Wrap updateProfile: when currency or name changes, re-fetch entries
   // (currency affects converted amounts; name affects authorName shown in By Member)
@@ -146,7 +124,7 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <AuthScreen onLogin={login} onRegister={register} loading={authLoading} error={authError} onClearError={clearError} onBiometricLogin={loginWithBiometric} currencyList={currencyList} onCurrencyPickerOpen={loadCurrencies} pendingRegistration={pendingRegistration} onVerifyRegistration={verifyRegistration} onResendRegistrationCode={resendRegistrationCode} onCancelRegistration={cancelRegistrationVerification} />;
+    return <AuthScreen onLogin={login} onRegister={register} loading={authLoading} error={authError} onClearError={clearError} onBiometricLogin={loginWithBiometric} currencyList={currencyList} currenciesLoading={currenciesLoading} onCurrencyPickerOpen={loadCurrencies} pendingRegistration={pendingRegistration} onVerifyRegistration={verifyRegistration} onResendRegistrationCode={resendRegistrationCode} onCancelRegistration={cancelRegistrationVerification} />;
   }
 
   // Category data passed down to all screens
@@ -156,7 +134,9 @@ function AppContent() {
     <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: StatusBar.currentHeight || 0 }}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={C.bg} translucent={false} />
 
-      {/* Biometric enrollment prompt — shown after login/register when device supports biometrics */}
+      {/* Biometric enrollment prompt — shown after login/register when device supports biometrics.
+          Note: this uses authenticateWithBiometric directly (enrollment confirmation flow).
+          The loginWithBiometric hook is a separate flow used for subsequent sign-ins. */}
       <Modal visible={!!pendingBiometricEnroll} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", padding: 24 }}>
           <View style={{ backgroundColor: C.cardBg, borderRadius: 16, padding: 24, width: "100%" }}>
@@ -171,6 +151,7 @@ function AppContent() {
                   const ok = await authenticateWithBiometric();
                   if (ok) {
                     await confirmBiometricEnroll();
+                    ToastAndroid.show("Biometrics enabled", ToastAndroid.SHORT);
                   } else {
                     dismissBiometricEnroll();
                   }
@@ -201,8 +182,14 @@ function AppContent() {
         borderBottomWidth: 0.5,
         borderBottomColor: C.border,
       }}>
-        {/* Left side - placeholder for layout balance */}
-        <View style={{ width: 36 }} />
+        {/* Left side - Logo and app name */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Image
+            source={require("./assets/no_background.png")}
+            style={{ width: 28, height: 28, resizeMode: "contain" }}
+          />
+          <Text style={{ fontSize: 18, fontWeight: "700", color: C.text }}>Moni</Text>
+        </View>
 
         {/* Right side - View toggle, sync indicator and loading indicator */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -222,32 +209,16 @@ function AppContent() {
             </TouchableOpacity>
           )}
           <SyncIndicator />
-          {entriesLoading && <ActivityIndicator color={C.green} size="small" />}
         </View>
       </View>
 
       {/* Offline banner — shown when offline with pending changes */}
       <OfflineBanner />
 
-      {/* Error banner */}
-      {entriesError && (
-        <View style={{
-          backgroundColor: C.redLight,
-          paddingHorizontal: 20,
-          paddingVertical: 10,
-          borderBottomWidth: 0.5,
-          borderBottomColor: C.redBorder,
-        }}>
-          <Text style={{ fontSize: 13, color: C.redDark }}>⚠ {entriesError} — showing cached data</Text>
-        </View>
-      )}
-
       {/* Screens */}
       <View style={{ flex: 1 }}>
         {tab === "month" && (
           <MonthOverviewScreen
-            entries={entries}
-            allEntries={allEntries}
             filterMonth={filterMonth}
             setFilterMonth={setFilterMonth}
             household={household}
@@ -259,17 +230,17 @@ function AppContent() {
         )}
         {tab === "history" && (
           <HistoryScreen
-            entries={allEntries}
+            user={user}
             onDelete={removeEntry}
             onUpdate={updateEntry}
             household={household}
+            showPersonalOnly={showPersonalOnly}
             pendingSync={pendingSync}
             {...catProps}
           />
         )}
         {tab === "year" && (
           <YearOverviewScreen
-            allEntries={allEntries}
             filterMonth={filterMonth}
             userCurrency={user?.currency}
             household={household}
@@ -279,13 +250,13 @@ function AppContent() {
           />
         )}
         {tab === "add" && (
-          <AddScreen onAdd={addEntry} authorName={user?.name} currency={user?.currency} currencyList={currencyList} onCurrencyPickerOpen={loadCurrencies} incomeCategories={incomeCategories} expenseCategories={expenseCategories} investmentCategories={investmentCategories} colorMap={colorMap} />
+          <AddScreen onAdd={addEntry} authorName={user?.name} currency={user?.currency} currencyList={currencyList} currenciesLoading={currenciesLoading} onCurrencyPickerOpen={loadCurrencies} incomeCategories={incomeCategories} expenseCategories={expenseCategories} investmentCategories={investmentCategories} colorMap={colorMap} />
         )}
         {tab === "account" && (
           <AccountScreen
-            key={accountKey}
             user={user}
             household={household}
+            householdError={householdError}
             pendingInvitations={pendingInvitations}
             onLogout={logout}
             onDeleteAccount={deleteAccount}
@@ -306,6 +277,7 @@ function AppContent() {
 
             onUpdateProfile={handleUpdateProfile}
             currencyList={currencyList}
+            currenciesLoading={currenciesLoading}
             onCurrencyPickerOpen={loadCurrencies}
           />
         )}
@@ -355,19 +327,19 @@ function AppContent() {
 
           // Regular tab — active gets pill background with icon+label, inactive just icon+label
           const iconMap = {
-            month:   { active: "📅", inactive: "📅" },
-            history: { active: "🕐", inactive: "🕐" },
-            year:    { active: "📊", inactive: "📊" },
-            account: { active: "👤", inactive: "👤" },
+            month:   "📅",
+            history: "🕐",
+            year:    "📊",
+            account: "👤",
           };
-          const emoji = iconMap[t.id]?.inactive ?? "•";
+          const emoji = iconMap[t.id] ?? "•";
           const hasNotification = t.id === "account" && pendingCount > 0;
 
           return (
             <TouchableOpacity
               key={t.id}
               style={{ flex: 1, alignItems: "center", paddingVertical: 4 }}
-              onPress={() => { setTab(t.id); if (t.id === "account") setAccountKey(k => k + 1); }}
+              onPress={() => { setTab(t.id); }}
               activeOpacity={0.7}
             >
               {/* Always 2 rows: icon on top, label below. Active gets pill background. */}

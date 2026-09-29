@@ -19,10 +19,12 @@ import { logger } from "../utils/logger.js";
 export const NetworkContext = createContext({
   isOnline: true,
   queueSize: 0,
+  failedCount: 0,
   isSyncing: false,
   lastSyncTime: null,
   syncError: null,
   sync: async () => {},
+  retryFailed: async () => {},
   enqueueOperation: async () => {},
 });
 
@@ -31,6 +33,7 @@ const SYNC_DEBOUNCE_MS = 500;
 export function NetworkProvider({ children }) {
   const [isOnline, setIsOnline]       = useState(true);
   const [queueSize, setQueueSize]     = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
   const [isSyncing, setIsSyncing]     = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [syncError, setSyncError]     = useState(null);
@@ -42,6 +45,7 @@ export function NetworkProvider({ children }) {
   const refreshQueueSize = useCallback(async () => {
     const status = await queueStorage.getQueueSummary();
     setQueueSize(status.total);
+    setFailedCount(status.failed);
     if (status.lastSuccessfulSync) setLastSyncTime(status.lastSuccessfulSync);
   }, []);
 
@@ -78,6 +82,13 @@ export function NetworkProvider({ children }) {
     triggerSync();
   }, [isSyncing, isOnline, triggerSync]);
 
+  // ── Retry all permanently-failed operations ────────────────────────────────
+  const retryFailed = useCallback(async () => {
+    await syncService.retryFailedOperations();
+    await refreshQueueSize();
+    if (isOnline) triggerSync();
+  }, [isOnline, triggerSync, refreshQueueSize]);
+
   // ── Enqueue operation (exposed to consumers) ───────────────────────────────
   const enqueueOperation = useCallback(async (type, payload, userId) => {
     await syncService.enqueue(type, payload, userId);
@@ -107,6 +118,7 @@ export function NetworkProvider({ children }) {
     // Listen for queue changes
     const handleQueueChanged = (status) => {
       setQueueSize(status.total || 0);
+      setFailedCount(status.failed || 0);
     };
     syncService.addEventListener('queueChanged', handleQueueChanged);
 
@@ -161,10 +173,12 @@ export function NetworkProvider({ children }) {
   const value = {
     isOnline,
     queueSize,
+    failedCount,
     isSyncing,
     lastSyncTime,
     syncError,
     sync,
+    retryFailed,
     enqueueOperation,
   };
 

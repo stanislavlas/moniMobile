@@ -1,5 +1,4 @@
 import { StyleSheet } from "react-native";
-import { createContext, useContext } from "react";
 
 // Light theme colors
 export const lightColors = {
@@ -63,19 +62,6 @@ export const darkColors = {
   borderMed:    "rgba(255,255,255,0.15)",
 };
 
-// Default to light theme
-export let C = lightColors;
-
-// Theme context
-export const ThemeContext = createContext({
-  isDark: false,
-  toggleTheme: () => {},
-  colors: lightColors,
-});
-
-export const useTheme = () => useContext(ThemeContext);
-
-// Function to get theme colors
 export const getColors = (isDark) => isDark ? darkColors : lightColors;
 
 export const FONTS = {
@@ -141,13 +127,6 @@ export const getStyles = (colors) => StyleSheet.create({
   // Section title
   sectionTitle: { fontSize: 11, fontWeight: "600", color: colors.textTertiary, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 },
 });
-
-// Default light theme styles
-export const S = getStyles(lightColors);
-
-export function fmt(n) {
-  return new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(n);
-}
 
 export const MONTH_LABELS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 export const MONTH_SHORT  = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

@@ -10,7 +10,7 @@ import { CalendarPicker } from "../../src/components/CalendarPicker.jsx";
 import { CategoryChips } from "../../src/components/CategoryChips.jsx";
 import { useKeyboardPadding } from "../../src/hooks/useKeyboardPadding.js";
 
-export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = [], incomeCategories, expenseCategories, investmentCategories = [], colorMap }) {
+export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = [], currenciesLoading = false, onCurrencyPickerOpen, incomeCategories, expenseCategories, investmentCategories = [], colorMap }) {
   const { colors: C, styles: S } = useTheme();
   const keyboardPadding = useKeyboardPadding();
   const [type, setType]               = useState("expense");
@@ -55,7 +55,7 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
       setFlash({ ok: true, msg: "✓ Saved" });
       setTimeout(() => setFlash(null), 1800);
     } catch (e) {
-      setFlash({ ok: false, msg: e.message || "Failed to save" });
+      setFlash({ ok: false, msg: e?.message || "Failed to save" });
     } finally { setSaving(false); }
   }
 
@@ -100,7 +100,7 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
         <View style={[S.rowBetween, { marginBottom: 6 }]}>
           <Text style={S.label}>Amount</Text>
           <TouchableOpacity
-            onPress={() => setShowCurrencyPicker(true)}
+            onPress={() => { onCurrencyPickerOpen?.(); setShowCurrencyPicker(true); }}
             style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: C.greenLight, borderWidth: 0.5, borderColor: C.greenBorder }}
           >
             <Text style={{ fontSize: 13, fontWeight: "600", color: C.greenDark }}>{selectedCurrency}</Text>
@@ -119,6 +119,7 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
           visible={showCurrencyPicker}
           selected={selectedCurrency}
           currencyList={currencyList}
+          loading={currenciesLoading}
           onSelect={setSelectedCurrency}
           onClose={() => setShowCurrencyPicker(false)}
         />

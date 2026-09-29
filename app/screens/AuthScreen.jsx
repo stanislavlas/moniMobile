@@ -7,10 +7,11 @@ import { getServerUrl, setServerUrl, DEFAULT_URL } from "../../src/services/serv
 import { CurrencyPicker } from "../../src/components/CurrencyPicker.jsx";
 import { PasswordInput } from "../../src/components/PasswordInput.jsx";
 import { FeedbackBanner } from "../../src/components/FeedbackBanner.jsx";
+import { ServerUrlEditor } from "../../src/components/ServerUrlEditor.jsx";
 import { useKeyboardPadding } from "../../src/hooks/useKeyboardPadding.js";
 import { forgotPassword as apiForgotPassword, resetPassword as apiResetPassword } from "../../src/services/auth.js";
 
-export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, onBiometricLogin, currencyList = [], pendingRegistration, onVerifyRegistration, onResendRegistrationCode, onCancelRegistration }) {
+export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, onBiometricLogin, currencyList = [], currenciesLoading = false, onCurrencyPickerOpen, pendingRegistration, onVerifyRegistration, onResendRegistrationCode, onCancelRegistration }) {
   const { colors: C, styles: S } = useTheme();
   const keyboardPadding = useKeyboardPadding();
   const [mode, setMode]           = useState("login"); // "login" | "register" | "forgot" | "reset"
@@ -27,6 +28,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
   const [currency, setCurrency]                     = useState("EUR");
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [otpCode, setOtpCode]     = useState("");
+  const [resendFeedback, setResendFeedback] = useState(null); // { ok, msg } | null
   // Forgot password state
   const [resetCode, setResetCode]       = useState("");
   const [newPassword, setNewPassword]   = useState("");
@@ -107,8 +109,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
     try {
       await apiResetPassword(resetCode.trim(), newPassword);
       switchMode("login");
-      setLocalError(null);
-      setEmail(email);
+      // email field is intentionally preserved so the user doesn't have to re-type it
     } catch (err) {
       setLocalError(err.message);
     } finally {
@@ -131,14 +132,14 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
             Contact your administrator to get the verification code, then enter it below to activate your account.
           </Text>
 
-          <FeedbackBanner feedback={displayError ? { ok: false, msg: displayError } : null} />
+          <FeedbackBanner feedback={displayError ? { ok: false, msg: displayError } : resendFeedback} />
 
           <Text style={[S.label, { marginBottom: 6 }]}>Verification code</Text>
           <TextInput
             style={[S.input, { letterSpacing: 8, fontSize: 20, textAlign: "center" }]}
             placeholder="000000"
             value={otpCode}
-            onChangeText={setOtpCode}
+            onChangeText={v => { setOtpCode(v); setLocalError(null); onClearError?.(); setResendFeedback(null); }}
             keyboardType="number-pad"
             maxLength={6}
             placeholderTextColor={C.textTertiary}
@@ -150,7 +151,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
             onPress={async () => {
               setLocalError(null); onClearError?.();
               try { await onVerifyRegistration(otpCode.trim()); }
-              catch (err) { setLocalError(err.message); }
+              catch (err) { setLocalError(err.message); setOtpCode(""); }
             }}
             disabled={isLoading}
           >
@@ -159,9 +160,12 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
 
           <TouchableOpacity
             onPress={async () => {
-              setLocalError(null); onClearError?.();
-              try { await onResendRegistrationCode?.(); }
-              catch (err) { setLocalError(err.message); }
+              setLocalError(null); onClearError?.(); setResendFeedback(null);
+              try {
+                await onResendRegistrationCode?.();
+                setResendFeedback({ ok: true, msg: "Code resent! Check with your administrator." });
+                setTimeout(() => setResendFeedback(null), 4000);
+              } catch (err) { setLocalError(err.message); }
             }}
             style={{ marginTop: 16, alignItems: "center" }}
             disabled={isLoading}
@@ -305,7 +309,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
             style={S.input}
             placeholder="you@example.com"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={v => { setEmail(v); setLocalError(null); onClearError?.(); }}
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
@@ -315,7 +319,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
           <Text style={[S.label, { marginBottom: 6 }]}>Password</Text>
           <PasswordInput
             value={password}
-            onChangeText={setPassword}
+            onChangeText={v => { setPassword(v); setLocalError(null); onClearError?.(); }}
             placeholder={mode === "register" ? "Min. 8 characters" : "••••••••"}
           />
 
@@ -327,7 +331,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
               <Text style={[S.label, { marginBottom: 6 }]}>Currency</Text>
               <TouchableOpacity
                 style={[S.input, { justifyContent: "center" }]}
-                onPress={() => setShowCurrencyPicker(true)}
+                onPress={() => { onCurrencyPickerOpen?.(); setShowCurrencyPicker(true); }}
               >
                 <Text style={{ color: C.text }}>
                   {currency}{currencyList.find(c => c.code === currency) ? ` — ${currencyList.find(c => c.code === currency).name}` : ""}
@@ -337,6 +341,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
                 visible={showCurrencyPicker}
                 selected={currency}
                 currencyList={currencyList}
+                loading={currenciesLoading}
                 onSelect={setCurrency}
                 onClose={() => setShowCurrencyPicker(false)}
               />
@@ -381,23 +386,13 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
           <TouchableOpacity onPress={() => setShowServerUrl(v => !v)} style={{ marginTop: 24, alignItems: "center" }}>
             <Text style={{ fontSize: 12, color: C.textTertiary }}>⚙ Server: {serverUrl}</Text>
           </TouchableOpacity>
-          {showServerUrl && (
-            <View style={{ marginTop: 10 }}>
-              <Text style={[S.label, { marginBottom: 6 }]}>Backend URL</Text>
-              <TextInput
-                style={S.input}
-                value={serverUrlDraft}
-                onChangeText={setServerUrlDraft}
-                placeholder={DEFAULT_URL}
-                placeholderTextColor={C.textTertiary}
-                autoCapitalize="none"
-                keyboardType="url"
-              />
-              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={handleSaveServerUrl}>
-                <Text style={S.btnPrimaryText}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          <ServerUrlEditor
+            visible={showServerUrl}
+            draft={serverUrlDraft}
+            onChangeDraft={setServerUrlDraft}
+            onSave={handleSaveServerUrl}
+            placeholder={DEFAULT_URL}
+          />
         </>
       )}
     </ScrollView>

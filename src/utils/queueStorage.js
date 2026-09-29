@@ -17,7 +17,7 @@
  *       payload: { /* operation-specific data *\/ },
  *       timestamp: 1234567890,
  *       retryCount: 0,
- *       status: "pending" | "syncing" | "failed",
+ *       status: "pending" | "failed",
  *       error: null | string,
  *       userId: "user-id",
  *     }
@@ -28,9 +28,10 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { logger } from "./logger.js";
 
-const QUEUE_KEY = "budget_sync_queue";
-const CONFLICTS_KEY = "budget_sync_conflicts";
+const QUEUE_KEY = "moni_sync_queue";
+const CONFLICTS_KEY = "moni_sync_conflicts";
 const MAX_QUEUE_SIZE = 100;
 const MAX_CONFLICTS = 20;
 
@@ -56,8 +57,9 @@ export async function loadQueue() {
 export async function saveQueue(queueState) {
   try {
     await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queueState));
-  } catch {
-    // Ignore storage errors — queue is best-effort
+  } catch (err) {
+    // Log the failure — lost queue state means pending operations won't survive restart
+    logger.error('storage', 'Failed to persist sync queue:', err.message);
   }
 }
 
@@ -65,6 +67,11 @@ export async function saveQueue(queueState) {
  * Add an operation to the queue.
  * Returns the new operation object (with generated id + timestamp).
  * Throws if queue is at MAX_QUEUE_SIZE.
+ *
+ * Note: AsyncStorage is a flat key-value store with no partial-update API.
+ * Every mutation must read the full blob, modify it in memory, then write
+ * it back. This read→modify→write cycle is unavoidable with AsyncStorage.
+ * The queue is capped at MAX_QUEUE_SIZE (100) to keep the blob small.
  */
 export async function addOperation({ type, payload, userId }) {
   const queue = await loadQueue();
@@ -131,7 +138,6 @@ export async function getQueueSummary() {
   return {
     total: ops.length,
     pending: ops.filter(o => o.status === "pending").length,
-    syncing: ops.filter(o => o.status === "syncing").length,
     failed: ops.filter(o => o.status === "failed").length,
     lastSyncAttempt: queue.lastSyncAttempt,
     lastSuccessfulSync: queue.lastSuccessfulSync,

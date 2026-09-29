@@ -1,18 +1,23 @@
 {
   "expo": {
-    "name": "Budget",
+    "name": "Moni",
     "slug": "budget",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1D9E75"
       },
-      "package": "com.yourname.budget",
-      "versionCode": 1
+      "notification": {
+        "icon": "./assets/notification-icon.png",
+        "color": "#1D9E75"
+      },
+      "package": "com.stanislavlas.moni",
+      "versionCode": 2,
+      "kotlinVersion": "2.0.21"
     },
     "platforms": [
       "android"
@@ -34,7 +39,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#1D9E75"
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "owner": "slas"
   }

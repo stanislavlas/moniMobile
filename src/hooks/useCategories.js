@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   listCustomCategories,
@@ -9,14 +9,22 @@ import syncService from "../services/syncService.js";
 import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 import { logger } from "../utils/logger.js";
 
-const CACHE_KEY = "budget_custom_categories";
+const CACHE_KEY = "moni_custom_categories";
 
 const COLOR_PALETTE = [
   "#7F77DD", "#1D9E75", "#D85A30", "#378ADD", "#EF9F27",
   "#D4537E", "#5DCAA5", "#534AB7", "#BA7517", "#185FA5",
   "#993556", "#63B3ED", "#888780", "#F0997B", "#AFA9EC",
 ];
-function pickColor(index) { return COLOR_PALETTE[index % COLOR_PALETTE.length]; }
+function pickColor(categoryId) {
+  // Hash the categoryId so the same category always gets the same fallback color,
+  // regardless of its position in the array.
+  let hash = 0;
+  for (let i = 0; i < categoryId.length; i++) {
+    hash = (hash * 31 + categoryId.charCodeAt(i)) >>> 0;
+  }
+  return COLOR_PALETTE[hash % COLOR_PALETTE.length];
+}
 
 async function loadCached() { try { return JSON.parse(await AsyncStorage.getItem(CACHE_KEY) || "[]"); } catch { return []; } }
 async function saveCache(c) { try { await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch {} }
@@ -33,9 +41,10 @@ function transformCategory(cat) {
   };
 }
 
-export function useCategories(isAuthenticated) {
+export function useCategories(isAuthenticated, householdId) {
   const [allCats,     setAllCats]    = useState([]);
   const [loading,     setLoading]    = useState(false);
+  const [error,       setError]      = useState(null);
 
   // ── Read: cache + network in parallel ─────────────────────────────────────
   const fetchCategories = useCallback(async () => {
@@ -45,12 +54,14 @@ export function useCategories(isAuthenticated) {
     const networkPromise = listCustomCategories().catch(err => {
       if (err.code === "AUTH_EXPIRED") throw err;
       logger.info?.('categories', 'network error, using cache:', err.message);
+      setError(err.message);
       return null;
     });
 
     const cached = await cachePromise;
     if (cached.length > 0) setAllCats(cached);
-    setLoading(false);
+    // Keep loading=true until the network response also arrives
+    setLoading(true);
 
     const data = await networkPromise;
     if (data) {
@@ -62,10 +73,26 @@ export function useCategories(isAuthenticated) {
         saveCache(merged);
         return merged;
       });
+      setError(null);
     }
+    setLoading(false);
   }, [isAuthenticated]);
 
+  // Initial fetch + re-fetch when authentication state changes
   useEffect(() => { fetchCategories(); }, [fetchCategories]);
+
+  // Re-fetch (and clear stale cache) when household membership changes — the
+  // server switches between personal and household-scoped categories based on
+  // the user's householdId, so the local cache becomes invalid on join/leave.
+  const prevHouseholdIdRef = useRef(householdId);
+  useEffect(() => {
+    if (prevHouseholdIdRef.current === householdId) return;
+    prevHouseholdIdRef.current = householdId;
+    if (!isAuthenticated) return;
+    setAllCats([]);
+    saveCache([]);
+    fetchCategories();
+  }, [householdId, isAuthenticated, fetchCategories]);
 
   useEffect(() => {
     const handleSyncComplete = ({ syncedOperations = [] }) => {
@@ -106,11 +133,11 @@ export function useCategories(isAuthenticated) {
   const expenseCategories    = allCats.filter(c => c.type === "expense");
   const investmentCategories = allCats.filter(c => c.type === "investment");
   const customCats           = allCats.filter(c => !c.isDefault);
-  const colorMap          = Object.fromEntries(allCats.map((c, i) => [c.categoryId, c.color || pickColor(i)]));
+  const colorMap          = Object.fromEntries(allCats.map((c) => [c.categoryId, c.color || pickColor(c.categoryId)]));
 
   function getCategoryById(id) {
     return allCats.find(c => c.categoryId === id) || { id, categoryId: id, label: id, emoji: "❓" };
   }
 
-  return { incomeCategories, expenseCategories, investmentCategories, allCategories: allCats, customCats, colorMap, getCategoryById, loading, error: null, createCategory, deleteCategory, refresh: fetchCategories };
+  return { incomeCategories, expenseCategories, investmentCategories, allCategories: allCats, customCats, colorMap, getCategoryById, loading, error, createCategory, deleteCategory, refresh: fetchCategories };
 }

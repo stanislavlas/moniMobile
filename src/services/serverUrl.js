@@ -1,7 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const KEY_SERVER_URL = "budget_server_url";
-const DEFAULT_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://api.homeassistant-las.work:8080";
+const KEY_SERVER_URL = "moni_server_url";
+// Fallback only used when EXPO_PUBLIC_API_BASE_URL is not set.
+// Set this env variable in your .env file — do NOT rely on this hardcoded default in production.
+const DEFAULT_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://localhost:3000";
 
 export async function getServerUrl() {
   try {

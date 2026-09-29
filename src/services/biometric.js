@@ -4,6 +4,7 @@
  */
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
+import { logger } from '../utils/logger.js';
 
 const KEY_BIOMETRIC_ENABLED = 'budget_biometric_enabled';
 const KEY_BIOMETRIC_EMAIL = 'budget_biometric_email';
@@ -22,22 +23,6 @@ export async function isBiometricSupported() {
 export async function hasBiometricEnrolled() {
   const enrolled = await LocalAuthentication.isEnrolledAsync();
   return enrolled;
-}
-
-/**
- * Get available biometric types (fingerprint, faceId, iris)
- */
-export async function getBiometricTypes() {
-  const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
-  return types;
-}
-
-/**
- * Get friendly name for biometric type
- */
-export function getBiometricName(types) {
-  // Always return "Biometrics" for consistency
-  return 'Biometrics';
 }
 
 /**
@@ -71,7 +56,7 @@ export async function enableBiometric(email) {
     await SecureStore.setItemAsync(KEY_BIOMETRIC_ENABLED, 'true');
     await SecureStore.setItemAsync(KEY_BIOMETRIC_EMAIL, email);
   } catch (error) {
-    console.error('Failed to enable biometric:', error);
+    logger.error('auth', 'Failed to enable biometric:', error);
     throw error;
   }
 }
@@ -84,7 +69,25 @@ export async function disableBiometric() {
     await SecureStore.deleteItemAsync(KEY_BIOMETRIC_ENABLED);
     await SecureStore.deleteItemAsync(KEY_BIOMETRIC_EMAIL);
   } catch (error) {
-    console.error('Failed to disable biometric:', error);
+    logger.error('auth', 'Failed to disable biometric:', error);
+  }
+}
+
+/**
+ * Check if biometrics can be used for login
+ * (device has hardware, user has enrolled, and biometric login is enabled)
+ * @returns {Promise<boolean>}
+ */
+export async function canUseBiometric() {
+  try {
+    const [supported, enrolled, enabled] = await Promise.all([
+      isBiometricSupported(),
+      hasBiometricEnrolled(),
+      isBiometricEnabled(),
+    ]);
+    return supported && enrolled && enabled;
+  } catch {
+    return false;
   }
 }
 
@@ -103,20 +106,7 @@ export async function authenticateWithBiometric() {
 
     return result.success;
   } catch (error) {
-    console.error('Biometric authentication error:', error);
+    logger.error('auth', 'Biometric authentication error:', error);
     return false;
   }
-}
-
-/**
- * Check if biometric login is available and ready to use
- */
-export async function canUseBiometric() {
-  const [supported, enrolled, enabled] = await Promise.all([
-    isBiometricSupported(),
-    hasBiometricEnrolled(),
-    isBiometricEnabled(),
-  ]);
-
-  return supported && enrolled && enabled;
 }

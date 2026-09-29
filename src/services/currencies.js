@@ -1,30 +1,24 @@
 // mobile/src/services/currencies.js
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getServerUrl } from "./serverUrl.js";
 
-const CACHE_KEY    = "budget_currencies";
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const FETCH_TIMEOUT_MS = 8000;
 
 export async function fetchCurrencies() {
-  // Try cache first
-  try {
-    const raw = await AsyncStorage.getItem(CACHE_KEY);
-    if (raw) {
-      const { data, fetchedAt } = JSON.parse(raw);
-      if (Date.now() - fetchedAt < CACHE_TTL_MS) return data;
-    }
-  } catch {}
-
-  // Fetch from backend (no auth required)
   const API_BASE = await getServerUrl();
-  const res = await fetch(`${API_BASE}/api/currencies`);
-  if (!res.ok) throw new Error(`Failed to fetch currencies: ${res.status}`);
-  const data = await res.json();
 
-  // Persist to cache
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
-    await AsyncStorage.setItem(CACHE_KEY, JSON.stringify({ data, fetchedAt: Date.now() }));
-  } catch {}
-
-  return data; // { "AUD": "Australian Dollar", ... }
+    const res = await fetch(`${API_BASE}/api/currencies`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`Failed to fetch currencies: ${res.status}`);
+    return res.json(); // { "AUD": "Australian Dollar", ... }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Currencies request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
