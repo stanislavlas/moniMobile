@@ -22,7 +22,7 @@ import { recentMonths } from "./entries.js";
 import { logger } from "./logger.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
 
-const INITIAL_MONTH_LIMIT = 12;
+const INITIAL_MONTH_LIMIT = 6;
 const LOAD_MORE_STEP = 12;
 
 function lastDayOf(ym) {
