@@ -8,9 +8,10 @@
  * totalInvestments, savedAmount, necessaryVsOptional, expensesByCategory,
  * memberBreakdown) — no client-side summation needed.
  *
- * @param {string}  cachePrefix   - AsyncStorage key prefix (e.g. "moni_dashboard_cache_")
- * @param {boolean} showHousehold - Whether to fetch household or personal data
- * @param {string}  filterMonth   - Currently selected YYYY-MM
+ * @param {string}  cachePrefix    - AsyncStorage key prefix (e.g. "moni_dashboard_cache_")
+ * @param {boolean} showHousehold  - Whether to fetch household or personal data
+ * @param {string}  filterMonth    - Currently selected YYYY-MM
+ * @param {number}  initialLimit   - How many months to show initially (default 6)
  * @returns {{ monthsData, dashboardCache, fetchDashboard, hasMoreMonths, loadMoreMonths }}
  */
 
@@ -22,7 +23,6 @@ import { recentMonths } from "./entries.js";
 import { logger } from "./logger.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
 
-const INITIAL_MONTH_LIMIT = 6;
 const LOAD_MORE_STEP = 6;
 
 function lastDayOf(ym) {
@@ -30,15 +30,21 @@ function lastDayOf(ym) {
   return new Date(Number(y), Number(mo), 0).getDate();
 }
 
-export function useDashboard(cachePrefix, showHousehold, filterMonth) {
+export function useDashboard(cachePrefix, showHousehold, filterMonth, initialLimit = 6) {
   const [allMonthKeys, setAllMonthKeys] = useState(() => recentMonths(3));
-  const [visibleCount, setVisibleCount] = useState(INITIAL_MONTH_LIMIT);
+  const [visibleCount, setVisibleCount] = useState(initialLimit);
   const [dashboardCache, setDashboardCache] = useState({});
   const [hasMoreMonths, setHasMoreMonths] = useState(false);
   const fetchedMonths = useRef(new Set());
 
   // Derive the visible slice; map to MonthScroller items
   const monthsData = allMonthKeys.slice(0, visibleCount).map(makeMonthItem);
+
+  // Sync visibleCount + hasMoreMonths when initialLimit is measured/updated
+  useEffect(() => {
+    setVisibleCount(initialLimit);
+    setHasMoreMonths(allMonthKeys.length > initialLimit);
+  }, [initialLimit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch all months from API upfront; merge with recent window
   useEffect(() => {
@@ -51,7 +57,7 @@ export function useDashboard(cachePrefix, showHousehold, filterMonth) {
         const sorted = [...all].sort((a, b) => b.localeCompare(a));
         logger.info("dashboard", `activeMonths loaded: ${sorted.length} (household=${showHousehold})`);
         setAllMonthKeys(sorted);
-        setHasMoreMonths(sorted.length > INITIAL_MONTH_LIMIT);
+        setHasMoreMonths(sorted.length > initialLimit);
       })
       .catch(() => { /* keep seed */ });
     return () => { cancelled = true; };
@@ -105,7 +111,7 @@ export function useDashboard(cachePrefix, showHousehold, filterMonth) {
     logger.info("dashboard", `household toggle (${showHousehold}) — resetting dashboard cache`);
     setDashboardCache({});
     setAllMonthKeys(recentMonths(3));
-    setVisibleCount(INITIAL_MONTH_LIMIT);
+    setVisibleCount(initialLimit);
     setHasMoreMonths(false);
     fetchedMonths.current = new Set();
     fetchDashboard(filterMonth);
