@@ -19,10 +19,15 @@ export async function listEntriesByYear(year, household = false) {
 /**
  * Returns YYYY-MM strings for months that have at least one entry.
  * Cheap endpoint — only date keys, no entry payloads.
+ * @param {boolean} household
+ * @param {number}  limit  0 = all months; >0 = only the N most-recent months
  */
-export async function listActiveMonths(household = false) {
-  const qs = household ? "?household=true" : "";
-  return authRequest(`/api/entries/months${qs}`);
+export async function listActiveMonths(household = false, limit = 0) {
+  const params = new URLSearchParams();
+  if (household) params.set("household", "true");
+  if (limit > 0) params.set("limit", String(limit));
+  const qs = params.toString();
+  return authRequest(`/api/entries/months${qs ? "?" + qs : ""}`);
 }
 
 /**

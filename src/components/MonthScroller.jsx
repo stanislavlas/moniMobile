@@ -5,17 +5,19 @@
  * and HistoryScreen.
  *
  * Props:
- *   monthsData  — [{ key: "YYYY-MM", month: number, year: number }]
- *   filterMonth — currently selected "YYYY-MM"
- *   onSelect    — called with the selected "YYYY-MM" key
- *   compact     — smaller pill style for inline use (default false)
- *   style       — extra style for the outer ScrollView
+ *   monthsData   — [{ key: "YYYY-MM", month: number, year: number }]
+ *   filterMonth  — currently selected "YYYY-MM"
+ *   onSelect     — called with the selected "YYYY-MM" key
+ *   compact      — smaller pill style for inline use (default false)
+ *   style        — extra style for the outer ScrollView
+ *   hasMore      — when true, renders a "Show more" pill at the end
+ *   onLoadMore   — called when the user taps the "Show more" pill
  */
 import { ScrollView, Text, TouchableOpacity } from "react-native";
 import { MONTH_SHORT } from "../utils/theme.js";
 import { useTheme } from "../contexts/ThemeContext.js";
 
-export function MonthScroller({ monthsData, filterMonth, onSelect, compact = false, style }) {
+export function MonthScroller({ monthsData, filterMonth, onSelect, compact = false, style, hasMore = false, onLoadMore }) {
   const { colors: C } = useTheme();
 
   return (
@@ -55,6 +57,29 @@ export function MonthScroller({ monthsData, filterMonth, onSelect, compact = fal
           </TouchableOpacity>
         );
       })}
+
+      {hasMore && (
+        <TouchableOpacity
+          onPress={onLoadMore}
+          style={{
+            paddingHorizontal: compact ? 14 : 18,
+            paddingVertical:   compact ? 8  : 12,
+            borderRadius: 10,
+            backgroundColor: "transparent",
+            marginHorizontal: compact ? 0 : 4,
+            borderWidth: 0.5,
+            borderColor: C.border,
+            borderStyle: "dashed",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ fontSize: compact ? 12 : 13, color: C.textTertiary, fontWeight: "500" }}>
+            Show more
+          </Text>
+        </TouchableOpacity>
+      )}
     </ScrollView>
   );
 }
+

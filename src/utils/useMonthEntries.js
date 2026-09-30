@@ -6,7 +6,7 @@
  *
  * Handles:
  *   - Seeding monthsData from recentMonths(3)
- *   - Fetching active months from API and merging them in
+ *   - Fetching active months from API and merging them in (limited to 12)
  *   - Fetching individual month entries on demand (cache-first)
  *   - Resetting when the household toggle changes
  *   - Invalidating / re-fetching when entryEvents fires
@@ -14,7 +14,7 @@
  * @param {string}   cachePrefix   - AsyncStorage key prefix (e.g. "moni_month_cache_")
  * @param {boolean}  showHousehold - Whether to fetch household or personal entries
  * @param {string}   filterMonth   - Currently selected YYYY-MM
- * @returns {{ monthsData, monthCache, fetchMonth }}
+ * @returns {{ monthsData, monthCache, fetchMonth, hasMoreMonths, loadAllMonths }}
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -22,27 +22,50 @@ import { listEntries, listActiveMonths } from "../services/entries.js";
 import { entryEvents } from "./entryEvents.js";
 import { transformEntry, recentMonths } from "./entries.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
+import { logger } from "./logger.js";
+
+const INITIAL_MONTH_LIMIT = 12;
 
 export function useMonthEntries(cachePrefix, showHousehold, filterMonth) {
   const [monthsData, setMonthsData] = useState(() =>
     recentMonths(3).map(makeMonthItem)
   );
   const [monthCache, setMonthCache] = useState({});
+  const [hasMoreMonths, setHasMoreMonths] = useState(false);
   const fetchedMonths = useRef(new Set());
 
   // Fetch distinct months from API; merge with recent window
   useEffect(() => {
     let cancelled = false;
-    listActiveMonths(showHousehold)
+    listActiveMonths(showHousehold, INITIAL_MONTH_LIMIT)
       .then(data => {
         if (cancelled) return;
         const recent = new Set(recentMonths(3));
         const all = new Set([...(Array.isArray(data) ? data : []), ...recent]);
         const sorted = [...all].sort((a, b) => b.localeCompare(a));
         setMonthsData(sorted.map(makeMonthItem));
+        setHasMoreMonths(Array.isArray(data) && data.length >= INITIAL_MONTH_LIMIT);
       })
       .catch(() => { /* keep seed */ });
     return () => { cancelled = true; };
+  }, [showHousehold]);
+
+  // Fetch ALL months — called when user taps "Show more"
+  const loadAllMonths = useCallback(() => {
+    listActiveMonths(showHousehold, 0)
+      .then(data => {
+        if (!Array.isArray(data)) return;
+        setMonthsData(prev => {
+          const existing = new Set(prev.map(m => m.key));
+          const extra = data.filter(k => !existing.has(k));
+          if (!extra.length) return prev;
+          return [...prev, ...extra.map(makeMonthItem)]
+            .sort((a, b) => b.key.localeCompare(a.key));
+        });
+        setHasMoreMonths(false);
+        logger.info("entries", `loadAllMonths: ${data.length} months total`);
+      })
+      .catch(e => logger.warn("entries", "loadAllMonths failed", e?.message));
   }, [showHousehold]);
 
   // Fetch a single month on demand — serve from AsyncStorage cache first, then network
@@ -74,6 +97,7 @@ export function useMonthEntries(cachePrefix, showHousehold, filterMonth) {
   useEffect(() => {
     setMonthCache({});
     setMonthsData(recentMonths(3).map(makeMonthItem));
+    setHasMoreMonths(false);
     fetchedMonths.current = new Set();
     fetchMonth(filterMonth);
   }, [showHousehold]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -104,5 +128,6 @@ export function useMonthEntries(cachePrefix, showHousehold, filterMonth) {
     });
   }, [cachePrefix, fetchMonth]);
 
-  return { monthsData, monthCache, fetchMonth };
+  return { monthsData, monthCache, fetchMonth, hasMoreMonths, loadAllMonths };
 }
+

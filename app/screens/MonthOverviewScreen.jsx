@@ -17,7 +17,7 @@ export function MonthOverviewScreen({ filterMonth, setFilterMonth, household, ge
   const fmtAmt = (val) => formatCurrency(val, currency);
   const showHousehold = !!household && !showPersonalOnly;
 
-  const { monthsData, dashboardCache } = useDashboard(CACHE_PREFIX, showHousehold, filterMonth);
+  const { monthsData, dashboardCache, hasMoreMonths, loadAllMonths } = useDashboard(CACHE_PREFIX, showHousehold, filterMonth);
 
   const currentData = dashboardCache[filterMonth] ?? { data: null, loading: true, error: null };
   const dash    = currentData.data;
@@ -61,7 +61,7 @@ export function MonthOverviewScreen({ filterMonth, setFilterMonth, household, ge
 
       {/* Month scroller */}
       <View style={{ paddingBottom: 20 }}>
-        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} />
+        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} hasMore={hasMoreMonths} onLoadMore={loadAllMonths} />
       </View>
 
       {loading && !dash && (
