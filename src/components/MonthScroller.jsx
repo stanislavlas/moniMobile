@@ -32,7 +32,9 @@ export function MonthScroller({ monthsData, filterMonth, onSelect, compact = fal
 
   const handleLayout = ({ nativeEvent: { layout: { width } } }) => {
     if (!onCountChange) return;
-    const count = Math.max(1, Math.floor((width + gap) / (pillWidth + gap)));
+    // Subtract half a pill width so the last visible pill is cut off,
+    // hinting the user that there are more months to scroll to.
+    const count = Math.max(1, Math.floor((width - pillWidth * 0.5 + gap) / (pillWidth + gap)));
     onCountChange(count);
   };
 
