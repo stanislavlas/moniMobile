@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { MONTH_LABELS } from "../../src/utils/theme.js";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
@@ -17,8 +17,7 @@ export function MonthOverviewScreen({ filterMonth, setFilterMonth, household, ge
   const fmtAmt = (val) => formatCurrency(val, currency);
   const showHousehold = !!household && !showPersonalOnly;
 
-  const [initialLimit, setInitialLimit] = useState(6);
-  const { monthsData, dashboardCache, hasMoreMonths, loadMoreMonths } = useDashboard(CACHE_PREFIX, showHousehold, filterMonth, initialLimit);
+  const { monthsData, dashboardCache, hasMoreMonths, loadMoreMonths } = useDashboard(CACHE_PREFIX, showHousehold, filterMonth);
 
   const currentData = dashboardCache[filterMonth] ?? { data: null, loading: true, error: null };
   const dash    = currentData.data;
@@ -62,7 +61,7 @@ export function MonthOverviewScreen({ filterMonth, setFilterMonth, household, ge
 
       {/* Month scroller */}
       <View style={{ paddingBottom: 20 }}>
-        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} hasMore={hasMoreMonths} onLoadMore={loadMoreMonths} onCountChange={setInitialLimit} />
+        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} hasMore={hasMoreMonths} onLoadMore={loadMoreMonths} />
       </View>
 
       {loading && !dash && (

@@ -14,7 +14,6 @@
  * @param {string}   cachePrefix    - AsyncStorage key prefix (e.g. "moni_month_cache_")
  * @param {boolean}  showHousehold  - Whether to fetch household or personal entries
  * @param {string}   filterMonth    - Currently selected YYYY-MM
- * @param {number}   initialLimit   - How many months to show initially (default 6)
  * @returns {{ monthsData, monthCache, fetchMonth, hasMoreMonths, loadMoreMonths }}
  */
 
@@ -25,23 +24,18 @@ import { transformEntry, recentMonths } from "./entries.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
 import { logger } from "./logger.js";
 
+const INITIAL_MONTH_LIMIT = 6;
 const LOAD_MORE_STEP = 6;
 
-export function useMonthEntries(cachePrefix, showHousehold, filterMonth, initialLimit = 6) {
+export function useMonthEntries(cachePrefix, showHousehold, filterMonth) {
   const [allMonthKeys, setAllMonthKeys] = useState(() => recentMonths(3));
-  const [visibleCount, setVisibleCount] = useState(initialLimit);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_MONTH_LIMIT);
   const [monthCache, setMonthCache] = useState({});
   const [hasMoreMonths, setHasMoreMonths] = useState(false);
   const fetchedMonths = useRef(new Set());
 
   // Derive the visible slice; map to MonthScroller items
   const monthsData = allMonthKeys.slice(0, visibleCount).map(makeMonthItem);
-
-  // Sync visibleCount + hasMoreMonths when initialLimit is measured/updated
-  useEffect(() => {
-    setVisibleCount(initialLimit);
-    setHasMoreMonths(allMonthKeys.length > initialLimit);
-  }, [initialLimit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch all months from API upfront; merge with recent window
   useEffect(() => {
@@ -53,7 +47,7 @@ export function useMonthEntries(cachePrefix, showHousehold, filterMonth, initial
         const all = new Set([...(Array.isArray(data) ? data : []), ...recent]);
         const sorted = [...all].sort((a, b) => b.localeCompare(a));
         setAllMonthKeys(sorted);
-        setHasMoreMonths(sorted.length > initialLimit);
+        setHasMoreMonths(sorted.length > INITIAL_MONTH_LIMIT);
       })
       .catch(() => { /* keep seed */ });
     return () => { cancelled = true; };
@@ -98,7 +92,7 @@ export function useMonthEntries(cachePrefix, showHousehold, filterMonth, initial
   useEffect(() => {
     setMonthCache({});
     setAllMonthKeys(recentMonths(3));
-    setVisibleCount(initialLimit);
+    setVisibleCount(INITIAL_MONTH_LIMIT);
     setHasMoreMonths(false);
     fetchedMonths.current = new Set();
     fetchMonth(filterMonth);

@@ -29,8 +29,7 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
   const [typeFilter, setTypeFilter]           = useState("all");
   const [necessityFilter, setNecessityFilter] = useState("all");
 
-  const [initialLimit, setInitialLimit] = useState(6);
-  const { monthsData, monthCache, hasMoreMonths, loadMoreMonths } = useMonthEntries(CACHE_PREFIX, showHousehold, filterMonth, initialLimit);
+  const { monthsData, monthCache, hasMoreMonths, loadMoreMonths } = useMonthEntries(CACHE_PREFIX, showHousehold, filterMonth);
 
   const currentData = monthCache[filterMonth] ?? { entries: [], loading: true, error: null };
   const rawEntries  = currentData.entries;
@@ -85,7 +84,7 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
         <Text style={[S.h2, { marginBottom: 10 }]}>History</Text>
 
         {/* Month scroller */}
-        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} compact style={{ marginBottom: 12 }} hasMore={hasMoreMonths} onLoadMore={loadMoreMonths} onCountChange={setInitialLimit} />
+        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} compact style={{ marginBottom: 12 }} hasMore={hasMoreMonths} onLoadMore={loadMoreMonths} />
 
         {/* Search */}
         <View style={localStyles.searchRow}>
