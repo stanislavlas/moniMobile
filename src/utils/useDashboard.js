@@ -23,7 +23,7 @@ import { logger } from "./logger.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
 
 const INITIAL_MONTH_LIMIT = 6;
-const LOAD_MORE_STEP = 12;
+const LOAD_MORE_STEP = 6;
 
 function lastDayOf(ym) {
   const [y, mo] = ym.split("-");

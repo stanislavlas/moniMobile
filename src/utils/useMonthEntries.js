@@ -25,7 +25,7 @@ import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "
 import { logger } from "./logger.js";
 
 const INITIAL_MONTH_LIMIT = 6;
-const LOAD_MORE_STEP = 12;
+const LOAD_MORE_STEP = 6;
 
 export function useMonthEntries(cachePrefix, showHousehold, filterMonth) {
   const [allMonthKeys, setAllMonthKeys] = useState(() => recentMonths(3));
