@@ -14,42 +14,50 @@
  *   onLoadMore     — called when the user taps the "Show more" pill
  *   onCountChange  — called with the number of pills that fit in the visible width
  */
+import { useRef } from "react";
 import { ScrollView, Text, TouchableOpacity } from "react-native";
 import { MONTH_SHORT } from "../utils/theme.js";
 import { useTheme } from "../contexts/ThemeContext.js";
 
-// Pill dimensions (must match the style objects below)
-const PILL_WIDTH_COMPACT     = 14 * 2 + 1 + 62; // paddingH×2 + border + ~text width
-const PILL_WIDTH_NORMAL      = 18 * 2 + 1 + 8 * 2 + 40; // paddingH×2 + border + marginH×2 + ~text
-const GAP_COMPACT            = 6;
-const GAP_NORMAL             = 0; // spacing comes from marginHorizontal on each pill
-
 export function MonthScroller({ monthsData, filterMonth, onSelect, compact = false, style, hasMore = false, onLoadMore, onCountChange }) {
   const { colors: C } = useTheme();
 
-  const pillWidth = compact ? PILL_WIDTH_COMPACT : PILL_WIDTH_NORMAL;
-  const gap       = compact ? GAP_COMPACT        : GAP_NORMAL;
+  const containerWidth = useRef(0);
+  const pillWidth      = useRef(0);
 
-  const handleLayout = ({ nativeEvent: { layout: { width } } }) => {
-    if (!onCountChange) return;
-    // Subtract half a pill width so the last visible pill is cut off,
-    // hinting the user that there are more months to scroll to.
-    const count = Math.max(1, Math.floor((width - pillWidth * 0.5 + gap) / (pillWidth + gap)));
+  const gap = compact ? 6 : 8; // gap-2 equiv for non-compact (marginHorizontal: 4 each side)
+
+  const handleContainerLayout = ({ nativeEvent: { layout: { width } } }) => {
+    containerWidth.current = width;
+    recalculate();
+  };
+
+  const handlePillLayout = ({ nativeEvent: { layout: { width } } }) => {
+    if (pillWidth.current !== 0) return; // only measure once
+    pillWidth.current = width;
+    recalculate();
+  };
+
+  const recalculate = () => {
+    if (!onCountChange || containerWidth.current === 0 || pillWidth.current === 0) return;
+    // Leave half a pill peeking on the right to hint scrollability
+    const count = Math.max(1, Math.floor((containerWidth.current - pillWidth.current * 0.5 + gap) / (pillWidth.current + gap)));
     onCountChange(count);
   };
 
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false}
-      onLayout={handleLayout}
+      onLayout={handleContainerLayout}
       contentContainerStyle={{ paddingHorizontal: compact ? 0 : 10, gap: compact ? 6 : 0, paddingVertical: 2 }}
       style={style}
     >
-      {monthsData.map(({ key, month, year }) => {
+      {monthsData.map(({ key, month, year }, index) => {
         const isActive = key === filterMonth;
         return (
           <TouchableOpacity
             key={key}
             onPress={() => onSelect(key)}
+            onLayout={index === 0 ? handlePillLayout : undefined}
             style={{
               paddingHorizontal: compact ? 14 : 18,
               paddingVertical:   compact ? 8  : 12,
