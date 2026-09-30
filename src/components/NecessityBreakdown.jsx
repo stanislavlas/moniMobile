@@ -54,10 +54,10 @@ export function NecessityBreakdown({ necessary, optional, total, currency = "EUR
         </View>
       </View>
 
-      {/* Split progress bar */}
+      {/* Split progress bar — Math.max guards against flex:0 making bar invisible */}
       <View style={{ height: 6, borderRadius: 3, backgroundColor: C.bgTertiary, marginTop: 10, overflow: "hidden", flexDirection: "row" }}>
-        <View style={{ flex: necessary, backgroundColor: C.red,   opacity: 0.8 }} />
-        <View style={{ flex: optional,  backgroundColor: C.amber, opacity: 0.8 }} />
+        <View style={{ flex: Math.max(0.01, necessary), backgroundColor: C.red,   opacity: 0.8 }} />
+        <View style={{ flex: Math.max(0.01, optional),  backgroundColor: C.amber, opacity: 0.8 }} />
       </View>
     </View>
   );

@@ -331,7 +331,7 @@ class SyncService {
 
       if (pendingOps.length === 0) {
         logger.info('sync', 'No pending operations');
-        this._emit('syncComplete', { synced: 0, errors: 0, authExpired: false });
+        this._emit('syncComplete', { synced: 0, errors: 0, authExpired: false, syncedOperations: [] });
         return { success: true, synced: 0, errors: 0, authExpired: false };
       }
 

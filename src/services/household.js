@@ -15,8 +15,6 @@ import { logger } from "../utils/logger.js";
 import { isRetryableError } from "../utils/isRetryableError.js";
 import { enqueueAndSync } from "../utils/enqueueAndSync.js";
 
-logger.info('household', 'Household service loaded');
-
 async function isOffline() {
   const { default: syncService } = await import("./syncService.js");
   return !syncService.isOnline();

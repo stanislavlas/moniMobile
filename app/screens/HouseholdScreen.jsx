@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   Alert, ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform
@@ -24,6 +24,8 @@ export function HouseholdScreen({
   const [nameInput, setName]   = useState("");
   const [emailInput, setEmail] = useState("");
   const [busy, setBusy]        = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   const { feedback, flash }    = useFeedback();
   const [sentPending, setSentPending] = useState([]);
 
@@ -34,11 +36,13 @@ export function HouseholdScreen({
   // Fetch pending sent invitations whenever the owner has a household
   useEffect(() => {
     if (!household || !user || user.householdRole !== "OWNER") return;
+    let cancelled = false;
     import("../../src/services/household.js")
       .then(({ getSentInvitations }) => getSentInvitations())
-      .then(data => setSentPending((data ?? []).filter(i => i.status === "PENDING")))
-      .catch(e => flash(false, e.message ?? "Failed to load sent invitations"));
-  }, [household?.householdId]);
+      .then(data => { if (!cancelled) setSentPending((data ?? []).filter(i => i.status === "PENDING")); })
+      .catch(e => { if (!cancelled) flash(false, e.message ?? "Failed to load sent invitations"); });
+    return () => { cancelled = true; };
+  }, [household?.householdId, flash]);
 
   const localStyles = {
     avatar:    { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center" },
@@ -75,17 +79,17 @@ export function HouseholdScreen({
     setBusy(true);
     try {
       await onCancelInvitation(invitationId);
-      setSentPending(prev => prev.filter(i => i.invitationId !== invitationId));
+      if (mountedRef.current) setSentPending(prev => prev.filter(i => i.invitationId !== invitationId));
       // Refresh from server to get authoritative state
       import("../../src/services/household.js")
         .then(({ getSentInvitations }) => getSentInvitations())
-        .then(data => setSentPending((data ?? []).filter(i => i.status === "PENDING")))
+        .then(data => { if (mountedRef.current) setSentPending((data ?? []).filter(i => i.status === "PENDING")); })
         .catch(() => {});
-      flash(true, "Invitation cancelled.");
+      if (mountedRef.current) flash(true, "Invitation cancelled.");
     } catch (e) {
-      flash(false, e.message ?? "Failed to cancel invitation.");
+      if (mountedRef.current) flash(false, e.message ?? "Failed to cancel invitation.");
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
@@ -223,7 +227,7 @@ export function HouseholdScreen({
             {isOwner && sentPending.length > 0 && (
               <View style={{ marginBottom: 16 }}>
                 <Text style={[S.label, { marginBottom: 8 }]}>Sent invitations (Pending)</Text>
-                {sentPending.map((inv, i) => (
+                {sentPending.map((inv) => (
                   <View key={inv.invitationId}
                     style={{ borderRadius: 14, borderWidth: 0.5, borderColor: C.border, overflow: "hidden", marginBottom: 6 }}>
                     <View style={[S.row, { padding: 12, justifyContent: "space-between" }]}>

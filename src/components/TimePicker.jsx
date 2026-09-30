@@ -17,22 +17,27 @@ function Column({ data, selectedIndex, onSelect, label, resetKey }) {
   const isJumping   = useRef(false); // true while we silently reposition
 
   function scrollTo(index, animated = false) {
-    // offset = item position + header pad, so the item centres in the viewport
+    // offset = index * ITEM_HEIGHT — the FlatList's scroll position maps directly to
+    // item offsets regardless of paddingVertical (padding shifts content, not viewport).
     listRef.current?.scrollToOffset({ offset: index * ITEM_HEIGHT, animated });
   }
 
   useEffect(() => {
     const t = setTimeout(() => scrollTo(selectedIndex, false), 100);
     return () => clearTimeout(t);
-  }, [resetKey]);
+  }, [resetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // selectedIndex is intentionally omitted: the reset timer is only needed on
+  // open/reset (driven by resetKey). User-tap selections go through scrollTo()
+  // directly in the TouchableOpacity handler.
 
   function snap(offsetY) {
-    // offsetY is the raw scroll offset; item 0 starts at 0 (no header)
+    // offsetY is the viewport scroll position. Item i is centered when offsetY = i * ITEM_HEIGHT.
+    // Clamp to valid range to prevent selecting out-of-bounds indices.
     const index   = Math.round(offsetY / ITEM_HEIGHT);
-    const wrapped = ((index % data.length) + data.length) % data.length;
-    onSelect(wrapped);
+    const clamped = Math.max(0, Math.min(index, data.length - 1));
+    onSelect(clamped);
     isJumping.current = true;
-    listRef.current?.scrollToOffset({ offset: wrapped * ITEM_HEIGHT, animated: false });
+    listRef.current?.scrollToOffset({ offset: clamped * ITEM_HEIGHT, animated: false });
     setTimeout(() => { isJumping.current = false; }, 50);
   }
 
@@ -121,7 +126,7 @@ export function TimePicker({ visible, value = "20:00", onChange, onClose }) {
       setMinIdx(min);
       setResetKey(k => k + 1);
     }
-  }, [visible]);
+  }, [visible, value]);
 
   const hh = String(hourIdx).padStart(2, "0");
   const mm = String(minIdx * 5).padStart(2, "0");

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   listCustomCategories,
-  createCustomCategory,
 } from "../services/customCategories.js";
 import { fromApiTransactionType } from "../utils/enums.js";
 import syncService from "../services/syncService.js";
@@ -53,7 +52,7 @@ export function useCategories(isAuthenticated, householdId) {
     const cachePromise   = loadCached();
     const networkPromise = listCustomCategories().catch(err => {
       if (err.code === "AUTH_EXPIRED") throw err;
-      logger.info?.('categories', 'network error, using cache:', err.message);
+      logger.info('categories', 'network error, using cache:', err.message);
       setError(err.message);
       return null;
     });
@@ -106,26 +105,18 @@ export function useCategories(isAuthenticated, householdId) {
 
   // ── Writes ─────────────────────────────────────────────────────────────────
   const createCategory = useCallback(async ({ label, emoji, type }) => {
-    if (!syncService.isOnline()) {
-      throw new Error("You are offline. Please connect to the internet to add a category.");
-    }
-    const result = await createCustomCategory({ label, emoji, type, color: "#7F77DD" }, { skipQueue: true });
+    await enqueueAndSync("category.create", { label, emoji, type, color: "#7F77DD" });
     await fetchCategories();
-    return result;
   }, [fetchCategories]);
 
   const deleteCategory = useCallback(async (categoryId) => {
-    if (categoryId.startsWith("temp-")) {
-      setAllCats(prev => { const n = prev.filter(c => c.categoryId !== categoryId); saveCache(n); return n; });
-      return;
-    }
-
+    // Optimistically remove from local state immediately
     setAllCats(prev => { const n = prev.filter(c => c.categoryId !== categoryId); saveCache(n); return n; });
 
     try {
       await enqueueAndSync("category.delete", { categoryId });
     } catch (err) {
-      logger.warn?.('categories', 'Failed to enqueue deleteCategory', err.message);
+      logger.warn('categories', 'Failed to enqueue deleteCategory', err.message);
     }
   }, []);
 

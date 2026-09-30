@@ -23,8 +23,6 @@ import { authRequest } from "./auth.js";
 import { logger } from "../utils/logger.js";
 import { isRetryableError } from "../utils/isRetryableError.js";
 
-logger.info('categories', 'Categories service loaded');
-
 /** Returns true if any pending-sync queue entry references the given categoryId. */
 async function isCategoryInUseByQueue(categoryId) {
   const { loadQueue } = await import("../utils/queueStorage.js");

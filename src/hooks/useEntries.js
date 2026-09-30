@@ -29,7 +29,7 @@ async function loadPersistedPendingIds() {
     const queue = await loadQueue();
     const ids = new Set();
     for (const op of queue.operations) {
-      if (op.status !== "pending") continue;
+      if (op.status !== "pending" && op.status !== "failed") continue;
       if (op.payload?.entryId) ids.add(op.payload.entryId);
     }
     return ids;
@@ -77,6 +77,10 @@ export function useEntries() {
   const addEntry = useCallback(async (entry) => {
     if (entry.date) entryEvents.emit(entry.date);
 
+    // Note: new entries don't get a PENDING badge because the server assigns
+    // the entryId and we don't know it yet at enqueue time. The UI already
+    // shows a cache-first refresh (history screen re-fetches on entryEvent),
+    // so the entry appears immediately without a stale-looking PENDING label.
     try {
       await enqueueAndSync("entry.create", entry);
     } catch (err) {

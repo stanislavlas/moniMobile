@@ -72,6 +72,13 @@ export async function saveQueue(queueState) {
  * Every mutation must read the full blob, modify it in memory, then write
  * it back. This read→modify→write cycle is unavoidable with AsyncStorage.
  * The queue is capped at MAX_QUEUE_SIZE (100) to keep the blob small.
+ *
+ * CONCURRENCY WARNING: Callers must not fire multiple write operations
+ * concurrently (e.g., back-to-back addOperation calls without awaiting).
+ * Concurrent reads before a write completes will produce stale snapshots
+ * that overwrite each other. In the current architecture this is safe
+ * because enqueueAndSync serialises calls through a single async chain,
+ * but be careful if adding new call-sites.
  */
 export async function addOperation({ type, payload, userId }) {
   const queue = await loadQueue();

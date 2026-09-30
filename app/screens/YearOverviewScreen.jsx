@@ -2,20 +2,23 @@ import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
 import { MONTH_SHORT } from "../../src/utils/theme.js";
 import { formatCurrency } from "../../src/utils/enums.js";
-import { transformEntry } from "../../src/utils/entries.js";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import { FinancialPillRow } from "../../src/components/FinancialPillRow.jsx";
 import { NecessityBreakdown } from "../../src/components/NecessityBreakdown.jsx";
 import { MemberBreakdown } from "../../src/components/MemberBreakdown.jsx";
-import { listEntriesByYear, listActiveYears } from "../../src/services/entries.js";
+import { getYearDashboard } from "../../src/services/dashboard.js";
+import { listActiveYears } from "../../src/services/entries.js";
 import { entryEvents } from "../../src/utils/entryEvents.js";
+import { logger } from "../../src/utils/logger.js";
 
 export function YearOverviewScreen({ filterMonth, userCurrency, household, showPersonalOnly, getCategoryById, colorMap }) {
   const { colors: C, styles: S } = useTheme();
   const currency = userCurrency || "EUR";
   const fmtAmt = (val) => formatCurrency(val, currency);
 
-  const currentYear = new Date().getFullYear();
+  // currentYear is memoized with [] so it's computed once and stays stable,
+  // preventing unnecessary re-runs of effects that list it as a dependency.
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
   const [selectedYear, setSelectedYear] = useState(() => parseInt(filterMonth.slice(0, 4)));
   const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => parseInt(filterMonth.slice(5, 7)) - 1);
 
@@ -25,12 +28,14 @@ export function YearOverviewScreen({ filterMonth, userCurrency, household, showP
     setSelectedMonthIndex(parseInt(filterMonth.slice(5, 7)) - 1);
   }, [filterMonth]);
 
-  // Cache: { [year]: { entries, loading, error } }
+  // Year cache: { [year]: { data: YearDashboardResponse | null, loading, error } }
   const [yearCache, setYearCache] = useState({});
-  // Seed with current year; replaced by API response
+  // Mirror the cache in a ref so fetchYear can guard against duplicate fetches
+  // without needing yearCache in its useCallback deps (which would cause an
+  // infinite re-render loop: setYearCache → new yearCache → new fetchYear →
+  // useEffect fires → fetchYear called → setYearCache → …).
+  const yearCacheRef = useRef({});
   const [activeYears, setActiveYears] = useState([currentYear]);
-  // Tracks years already fetched or in-flight — stable ref, no yearCache dep needed
-  const fetchedYears = useRef(new Set());
   const showHousehold = !!household && !showPersonalOnly;
 
   // Fetch distinct years that have data; always include current year
@@ -46,109 +51,107 @@ export function YearOverviewScreen({ filterMonth, userCurrency, household, showP
     return () => { cancelled = true; };
   }, [showHousehold, currentYear]);
 
-  // Fetch entries for the selected year on demand — stable callback, no yearCache dep
-  const fetchYear = useCallback(async (y) => {
-    if (fetchedYears.current.has(y)) return; // already fetched or in-flight
-    fetchedYears.current.add(y);
-    setYearCache(prev => ({ ...prev, [y]: { entries: [], loading: true, error: null } }));
-    try {
-      const data = await listEntriesByYear(y, showHousehold);
-      const transformed = (Array.isArray(data) ? data : []).map(transformEntry);
-      setYearCache(prev => ({ ...prev, [y]: { entries: transformed, loading: false, error: null } }));
-    } catch (err) {
-      fetchedYears.current.delete(y); // allow retry on error
-      setYearCache(prev => ({ ...prev, [y]: { entries: [], loading: false, error: err.message } }));
-    }
+  // Fetch the full year in one request.
+  // yearCache is intentionally NOT in the deps array — the ref guards against
+  // duplicate fetches, keeping fetchYear stable and preventing infinite loops.
+  const fetchYear = useCallback((y, force = false) => {
+    if (!force && yearCacheRef.current[y]?.data) return;
+    setYearCache(prev => {
+      const next = { ...prev, [y]: { data: null, loading: true, error: null } };
+      yearCacheRef.current = next;
+      return next;
+    });
+    logger.info("dashboard", `YearOverview fetchYear: ${y}`);
+    getYearDashboard(y, showHousehold)
+      .then(data => setYearCache(prev => {
+        const next = { ...prev, [y]: { data, loading: false, error: null } };
+        yearCacheRef.current = next;
+        return next;
+      }))
+      .catch(err => {
+        logger.error("dashboard", `YearOverview fetchYear error: ${y}`, err.message);
+        setYearCache(prev => {
+          const next = { ...prev, [y]: { data: null, loading: false, error: err.message } };
+          yearCacheRef.current = next;
+          return next;
+        });
+      });
   }, [showHousehold]);
 
-  // Reset everything when household toggle changes
+  // Reset on household toggle — declared BEFORE the fetch effect so React
+  // runs this cleanup first, preventing stale data from briefly appearing.
   useEffect(() => {
+    yearCacheRef.current = {};
     setYearCache({});
     setActiveYears([currentYear]);
-    fetchedYears.current = new Set();
   }, [showHousehold, currentYear]);
 
+  // Fetch on year or household change (runs after the reset effect above)
   useEffect(() => { fetchYear(selectedYear); }, [selectedYear, fetchYear]);
 
-  // Invalidate a year's cache when an entry in that year is mutated
+  // Invalidate year when entries are mutated
   useEffect(() => {
     return entryEvents.subscribe(date => {
       if (!date) {
-        fetchedYears.current = new Set();
+        yearCacheRef.current = {};
         setYearCache({});
         return;
       }
       const affectedYear = parseInt(date.slice(0, 4), 10);
-      fetchedYears.current.delete(affectedYear);
       setYearCache(prev => {
         if (!prev[affectedYear]) return prev;
         const next = { ...prev };
         delete next[affectedYear];
+        yearCacheRef.current = next;
         return next;
       });
       setActiveYears(prev =>
         prev.includes(affectedYear) ? prev : [...prev, affectedYear].sort((a, b) => b - a)
       );
+      if (affectedYear === selectedYear) fetchYear(selectedYear, true);
     });
-  }, []);
+  }, [selectedYear, fetchYear]);
 
-  const currentData = yearCache[selectedYear] ?? { entries: [], loading: true, error: null };
-  const allEntries  = currentData.entries;
-  const loading     = currentData.loading;
+  const cached   = yearCache[selectedYear] ?? { data: null, loading: true, error: null };
+  const yearData = cached.data;
+  const loading  = cached.loading;
 
-  const yearTotals = useMemo(() => {
-    const income     = allEntries.filter(e => e.type === "income").reduce((s,e)     => s + e.amount, 0);
-    const expense    = allEntries.filter(e => e.type === "expense").reduce((s,e)    => s + e.amount, 0);
-    const investment = allEntries.filter(e => e.type === "investment").reduce((s,e) => s + e.amount, 0);
-    return { income, expense, investment, balance: income - expense - investment };
-  }, [allEntries]);
-
-  const monthlyData = useMemo(() => (
+  // Build 12-month display array from the single response
+  const monthlyData = useMemo(() =>
     MONTH_SHORT.map((m, i) => {
-      const key = `${selectedYear}-${String(i+1).padStart(2,"0")}`;
-      const inc = allEntries.filter(e => e.date?.startsWith(key) && e.type==="income").reduce((s,e) => s+e.amount, 0);
-      const exp = allEntries.filter(e => e.date?.startsWith(key) && e.type==="expense").reduce((s,e) => s+e.amount, 0);
-      const inv = allEntries.filter(e => e.date?.startsWith(key) && e.type==="investment").reduce((s,e) => s+e.amount, 0);
-      return { m, inc, exp, inv };
-    })
-  ), [allEntries, selectedYear]);
+      const mo   = String(i + 1).padStart(2, "0");
+      const ym   = `${selectedYear}-${mo}`;
+      const ms   = yearData?.months?.[ym] ?? null;
+      return {
+        m,
+        ym,
+        inc: parseFloat(ms?.totalIncome?.value      ?? 0),
+        exp: parseFloat(ms?.totalExpenses?.value    ?? 0),
+        inv: parseFloat(ms?.totalInvestments?.value ?? 0),
+        necessary: parseFloat(ms?.necessaryVsOptional?.necessary?.value ?? 0),
+        optional:  parseFloat(ms?.necessaryVsOptional?.optional?.value  ?? 0),
+      };
+    }),
+  [selectedYear, yearData]);
+
+  // Annual totals — read directly from API yearTotals
+  const yt         = yearData?.yearTotals;
+  const yearTotals = {
+    income:     parseFloat(yt?.totalIncome?.value      ?? 0),
+    expense:    parseFloat(yt?.totalExpenses?.value    ?? 0),
+    investment: parseFloat(yt?.totalInvestments?.value ?? 0),
+  };
+  const yearBalance  = parseFloat(yt?.savedAmount?.value ?? 0);
+  const yearNecessity = {
+    necessary: parseFloat(yt?.necessaryVsOptional?.necessary?.value ?? 0),
+    optional:  parseFloat(yt?.necessaryVsOptional?.optional?.value  ?? 0),
+  };
+  const yearMemberBreakdown = yt?.memberBreakdown ?? [];
 
   const maxBar = Math.max(...monthlyData.map(d => Math.max(d.inc, d.exp, d.inv)), 1);
 
-  const selectedMonthData = useMemo(() => {
-    const data = monthlyData[selectedMonthIndex];
-    return { month: MONTH_SHORT[selectedMonthIndex], income: data.inc, expense: data.exp, investment: data.inv, balance: data.inc - data.exp - data.inv };
-  }, [monthlyData, selectedMonthIndex]);
-
-  const yearNecessity = useMemo(() => {
-    const yearExpenses = allEntries.filter(e => e.type === "expense");
-    return {
-      necessary: yearExpenses.filter(e => e.necessity === "necessary").reduce((s,e) => s + e.amount, 0),
-      optional:  yearExpenses.filter(e => e.necessity === "optional").reduce((s,e) => s + e.amount, 0),
-    };
-  }, [allEntries]);
-
-  const monthNecessity = useMemo(() => {
-    const key = `${selectedYear}-${String(selectedMonthIndex + 1).padStart(2, "0")}`;
-    const monthExpenses = allEntries.filter(e => e.date?.startsWith(key) && e.type === "expense");
-    return {
-      necessary: monthExpenses.filter(e => e.necessity === "necessary").reduce((s,e) => s + e.amount, 0),
-      optional:  monthExpenses.filter(e => e.necessity === "optional").reduce((s,e) => s + e.amount, 0),
-    };
-  }, [allEntries, selectedYear, selectedMonthIndex]);
-
-  const yearMemberBreakdown = useMemo(() => {
-    if (!household) return [];
-    const map = {};
-    allEntries.forEach(e => {
-      if (!e.authorName) return;
-      if (!map[e.authorName]) map[e.authorName] = { income: 0, expense: 0, invested: 0 };
-      if (e.type === "income")     map[e.authorName].income   += e.amount;
-      if (e.type === "expense")    map[e.authorName].expense  += e.amount;
-      if (e.type === "investment") map[e.authorName].invested += e.amount;
-    });
-    return Object.entries(map);
-  }, [allEntries, household]);
+  const selData    = monthlyData[selectedMonthIndex];
+  const selBalance = (selData?.inc ?? 0) - (selData?.exp ?? 0) - (selData?.inv ?? 0);
 
   return (
     <ScrollView style={S.scroll} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
@@ -190,8 +193,8 @@ export function YearOverviewScreen({ filterMonth, userCurrency, household, showP
           {/* Annual balance */}
           <View style={{ alignItems: "center", paddingVertical: 20 }}>
             <Text style={[S.label, { marginBottom: 6 }]}>Annual Balance</Text>
-            <Text style={[S.h1, { fontSize: 38, color: yearTotals.balance >= 0 ? C.green : C.red, fontFamily: "Courier" }]}>
-              {fmtAmt(yearTotals.balance)}
+            <Text style={[S.h1, { fontSize: 38, color: yearBalance >= 0 ? C.green : C.red, fontFamily: "Courier" }]}>
+              {fmtAmt(yearBalance)}
             </Text>
           </View>
 
@@ -237,24 +240,26 @@ export function YearOverviewScreen({ filterMonth, userCurrency, household, showP
           </View>
 
           {/* Selected month detail */}
-          <View style={{ marginTop: 24, paddingTop: 20, borderTopWidth: 1, borderTopColor: C.border }}>
-            <Text style={{ fontSize: 13, color: C.textTertiary, textAlign: "center", marginBottom: 8, fontWeight: "600" }}>
-              {selectedMonthData.month} {selectedYear}
-            </Text>
-            <View style={{ alignItems: "center", paddingVertical: 12 }}>
-              <Text style={[S.label, { marginBottom: 4, fontSize: 12 }]}>Balance</Text>
-              <Text style={{ fontSize: 28, fontWeight: "700", color: selectedMonthData.balance >= 0 ? C.green : C.red, fontFamily: "Courier" }}>
-                {fmtAmt(selectedMonthData.balance)}
+          {selData && (
+            <View style={{ marginTop: 24, paddingTop: 20, borderTopWidth: 1, borderTopColor: C.border }}>
+              <Text style={{ fontSize: 13, color: C.textTertiary, textAlign: "center", marginBottom: 8, fontWeight: "600" }}>
+                {selData.m} {selectedYear}
               </Text>
-            </View>
-            <FinancialPillRow income={selectedMonthData.income} expense={selectedMonthData.expense} investment={selectedMonthData.investment} currency={currency} style={{ marginBottom: 16 }} />
-            {selectedMonthData.expense > 0 && (
-              <View style={{ marginBottom: 8 }}>
-                <Text style={S.sectionTitle}>Expense breakdown</Text>
-                <NecessityBreakdown necessary={monthNecessity.necessary} optional={monthNecessity.optional} total={selectedMonthData.expense} currency={currency} />
+              <View style={{ alignItems: "center", paddingVertical: 12 }}>
+                <Text style={[S.label, { marginBottom: 4, fontSize: 12 }]}>Balance</Text>
+                <Text style={{ fontSize: 28, fontWeight: "700", color: selBalance >= 0 ? C.green : C.red, fontFamily: "Courier" }}>
+                  {fmtAmt(selBalance)}
+                </Text>
               </View>
-            )}
-          </View>
+              <FinancialPillRow income={selData.inc} expense={selData.exp} investment={selData.inv} currency={currency} style={{ marginBottom: 16 }} />
+              {selData.exp > 0 && (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={S.sectionTitle}>Expense breakdown</Text>
+                  <NecessityBreakdown necessary={selData.necessary} optional={selData.optional} total={selData.exp} currency={currency} />
+                </View>
+              )}
+            </View>
+          )}
         </>
       )}
     </ScrollView>

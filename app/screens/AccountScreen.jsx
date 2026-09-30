@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Switch, Alert, BackHandler } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Switch, Alert, BackHandler, Platform } from "react-native";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import {
   isBiometricSupported,
@@ -10,7 +10,8 @@ import {
   authenticateWithBiometric,
 } from "../../src/services/biometric.js";
 import { storeBiometricCredentials, clearBiometricCredentials } from "../../src/services/auth.js";
-import { getServerUrl, setServerUrl, DEFAULT_URL } from "../../src/services/serverUrl.js";
+import { DEFAULT_URL } from "../../src/services/serverUrl.js";
+import { useServerUrl } from "../../src/hooks/useServerUrl.js";
 import { requestNotificationPermission } from "../../src/services/notifications.js";
 import { useFeedback } from "../../src/hooks/useFeedback.js";
 import { ServerUrlEditor } from "../../src/components/ServerUrlEditor.jsx";
@@ -60,7 +61,13 @@ export function AccountScreen({
   const [newPw, setNewPw]           = useState("");
   const [confirmPw, setConfirmPw]   = useState("");
   const [deletePw, setDeletePw]     = useState("");
-  const [loading, setLoading]       = useState(false);
+  // Per-section loading states so that saving one section doesn't disable
+  // buttons in all other sections simultaneously.
+  const [loadingProfile,      setLoadingProfile]      = useState(false);
+  const [loadingPassword,     setLoadingPassword]     = useState(false);
+  const [loadingNotifications,setLoadingNotifications] = useState(false);
+  const [loadingBiometric,    setLoadingBiometric]    = useState(false);
+  const [loadingDelete,       setLoadingDelete]       = useState(false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
@@ -76,11 +83,7 @@ export function AccountScreen({
   const [profilePw, setProfilePw]   = useState("");
 
   // Server URL
-  const [serverUrl, setServerUrlState]     = useState("");
-  const [serverUrlDraft, setServerUrlDraft] = useState("");
-  useEffect(() => {
-    getServerUrl().then(url => { setServerUrlState(url); setServerUrlDraft(url); });
-  }, []);
+  const { serverUrl, serverUrlDraft, setServerUrlDraft, saveServerUrl } = useServerUrl();
 
   // Biometric
   const [biometricSupported, setBiometricSupported] = useState(false);
@@ -135,7 +138,7 @@ export function AccountScreen({
     if (!nameChanged && !emailChanged) { setSection(null); return; }
     if (emailChanged && !profilePw) return flash(false, "Enter your password to change email.");
 
-    setLoading(true);
+    setLoadingProfile(true);
     try {
       const patch = {};
       if (nameChanged)  patch.name  = trimmedName;
@@ -147,14 +150,13 @@ export function AccountScreen({
     } catch (e) {
       flash(false, e.message || "Failed to update profile.");
     } finally {
-      setLoading(false);
+      setLoadingProfile(false);
     }
   }
 
   async function handleSaveServerUrl() {
     if (!serverUrlDraft.startsWith("http")) return flash(false, "URL must start with http:// or https://");
-    await setServerUrl(serverUrlDraft);
-    setServerUrlState(serverUrlDraft);
+    await saveServerUrl(serverUrlDraft);
     setSection(null);
     flash(true, "Server URL saved. Restart the app to apply.");
   }
@@ -170,7 +172,7 @@ export function AccountScreen({
       if (!granted) return flash(false, "Could not get notification permission. A custom build is required on this device.");
     }
 
-    setLoading(true);
+    setLoadingNotifications(true);
     try {
       await onUpdateProfile({
         notificationsEnabled:   notifEnabled,
@@ -183,34 +185,34 @@ export function AccountScreen({
     } catch (e) {
       flash(false, e.message || "Failed to save notification settings.");
     } finally {
-      setLoading(false);
+      setLoadingNotifications(false);
     }
   }
 
   async function handleChangePassword() {
     if (newPw.length < 8)    return flash(false, "New password must be at least 8 characters.");
     if (newPw !== confirmPw) return flash(false, "Passwords do not match.");
-    setLoading(true);
+    setLoadingPassword(true);
     try {
       await onChangePassword({ currentPassword: currentPw, newPassword: newPw });
       flash(true, "Password changed.");
       setCurrentPw(""); setNewPw(""); setConfirmPw(""); setSection(null);
     } catch (e) { flash(false, e.message); }
-    finally { setLoading(false); }
+    finally { setLoadingPassword(false); }
   }
 
   async function handleDelete() {
     if (!deletePw) return flash(false, "Enter your password to confirm.");
-    setLoading(true);
+    setLoadingDelete(true);
     try { await onDeleteAccount(deletePw); }
-    catch (e) { flash(false, e.message); setLoading(false); }
+    catch (e) { flash(false, e.message); setLoadingDelete(false); }
   }
 
   async function handleBiometricToggle(enable) {
     if (enable) {
       if (section !== "biometric") { setSection("biometric"); return; }
       if (!biometricPassword) return flash(false, "Enter your password to enable biometric login.");
-      setLoading(true);
+      setLoadingBiometric(true);
       try {
         const authenticated = await authenticateWithBiometric();
         if (!authenticated) { flash(false, "Biometric authentication failed."); return; }
@@ -223,7 +225,7 @@ export function AccountScreen({
       } catch (e) {
         flash(false, e.message || "Failed to enable biometric login.");
       } finally {
-        setLoading(false);
+        setLoadingBiometric(false);
       }
     } else {
       Alert.alert(`Disable ${biometricName}?`, "You'll need to enter your password to sign in.", [
@@ -289,8 +291,8 @@ export function AccountScreen({
 
         {/* Household fetch error */}
         {householdError && (
-          <View style={{ marginBottom: 12, padding: 12, borderRadius: 10, backgroundColor: "#FEECEC", borderWidth: 0.5, borderColor: "#F5C2C2" }}>
-            <Text style={{ fontSize: 13, color: "#C62828" }}>Could not load household data: {String(householdError)}</Text>
+          <View style={{ marginBottom: 12, padding: 12, borderRadius: 10, backgroundColor: C.redLight, borderWidth: 0.5, borderColor: C.redBorder }}>
+            <Text style={{ fontSize: 13, color: C.redDark }}>Could not load household data: {String(householdError)}</Text>
           </View>
         )}
 
@@ -369,8 +371,8 @@ export function AccountScreen({
                   <PasswordInput value={profilePw} onChangeText={setProfilePw} />
                 </>
               )}
-              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green, marginTop: 12 }]} onPress={handleSaveProfile} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Save</Text>}
+              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green, marginTop: 12 }]} onPress={handleSaveProfile} disabled={loadingProfile}>
+                {loadingProfile ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Save</Text>}
               </TouchableOpacity>
             </View>
           )}
@@ -525,9 +527,9 @@ export function AccountScreen({
               <TouchableOpacity
                 style={[S.btnPrimary, { backgroundColor: C.green, marginTop: 14 }]}
                 onPress={handleSaveNotifications}
-                disabled={loading}
+                disabled={loadingNotifications}
               >
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Save</Text>}
+                {loadingNotifications ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Save</Text>}
               </TouchableOpacity>
             </View>
           )}
@@ -557,14 +559,20 @@ export function AccountScreen({
           <View style={[S.card, { marginBottom: 12 }]}>
             <TouchableOpacity
               style={S.rowBetween}
-              onPress={() => biometricEnabled ? handleBiometricToggle(false) : toggleSection("biometric")}
+              onPress={() => !biometricEnabled && toggleSection("biometric")}
             >
               <View style={S.row}>
                 <Text style={{ fontSize: 18, marginRight: 12 }}>🔐</Text>
                 <Text style={S.body}>{biometricName} Login</Text>
               </View>
               {biometricEnabled
-                ? <Switch value={true} onValueChange={handleBiometricToggle} trackColor={{ false: C.bgTertiary, true: C.greenLight }} thumbColor={C.green} />
+                ? (
+                  // Wrap Switch in a View that stops touch events from bubbling
+                  // up to the TouchableOpacity, preventing double-trigger.
+                  <View onStartShouldSetResponder={() => true}>
+                    <Switch value={true} onValueChange={handleBiometricToggle} trackColor={{ false: C.bgTertiary, true: C.greenLight }} thumbColor={C.green} />
+                  </View>
+                )
                 : <Text style={{ color: C.textTertiary, fontSize: 18 }}>{section === "biometric" ? "−" : "+"}</Text>
               }
             </TouchableOpacity>
@@ -583,8 +591,8 @@ export function AccountScreen({
                 </Text>
                 <Text style={[S.label, { marginBottom: 5 }]}>Password</Text>
                 <PasswordInput value={biometricPassword} onChangeText={setBiometricPassword} />
-                <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={() => handleBiometricToggle(true)} disabled={loading}>
-                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Enable {biometricName}</Text>}
+                <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={() => handleBiometricToggle(true)} disabled={loadingBiometric}>
+                  {loadingBiometric ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Enable {biometricName}</Text>}
                 </TouchableOpacity>
               </View>
             )}
@@ -612,8 +620,8 @@ export function AccountScreen({
                   <PasswordInput value={val} onChangeText={set} />
                 </View>
               ))}
-              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={handleChangePassword} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Update password</Text>}
+              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.green }]} onPress={handleChangePassword} disabled={loadingPassword}>
+                {loadingPassword ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Update password</Text>}
               </TouchableOpacity>
             </View>
           )}
@@ -644,8 +652,8 @@ export function AccountScreen({
               </Text>
               <Text style={[S.label, { marginBottom: 5 }]}>Confirm with your password</Text>
               <PasswordInput value={deletePw} onChangeText={setDeletePw} />
-              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.red }]} onPress={handleDelete} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Permanently delete my account</Text>}
+              <TouchableOpacity style={[S.btnPrimary, { backgroundColor: C.red }]} onPress={handleDelete} disabled={loadingDelete}>
+                {loadingDelete ? <ActivityIndicator color="#fff" /> : <Text style={S.btnPrimaryText}>Permanently delete my account</Text>}
               </TouchableOpacity>
             </View>
           )}

@@ -15,7 +15,7 @@ export function CurrencyPicker({ visible, selected, currencyList, loading, onSel
     : currencyList;
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" onRequestClose={() => { setSearch(""); onClose(); }}>
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         {/* Header */}
         <View style={{

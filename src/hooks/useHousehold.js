@@ -114,15 +114,26 @@ export function useHousehold(isAuthenticated) {
     setError(null);
     try {
       await enqueueAndSync("household.create", { name });
+      // On success, give the sync a brief moment to complete then refresh.
+      // If still offline, the syncComplete listener will trigger fetch() later.
+      setTimeout(() => fetch(), 300);
     } catch (err) {
       setError(err.message ?? "Failed to create household");
       throw err;
     }
-  }, []);
+  }, [fetch]);
 
   const sendInvitation = useCallback(async (email) => {
-    return apiSendInvitation(email);
-  }, []);
+    setError(null);
+    try {
+      const result = await apiSendInvitation(email);
+      await fetch();
+      return result;
+    } catch (err) {
+      setError(err.message ?? "Failed to send invitation");
+      throw err;
+    }
+  }, [fetch]);
 
   const acceptInvitation = useCallback(async (invitationId) => {
     const result = await apiAcceptInvitation(invitationId);
@@ -134,21 +145,25 @@ export function useHousehold(isAuthenticated) {
   const rejectInvitation = useCallback(async (invitationId) => {
     await apiRejectInvitation(invitationId);
     setPending(prev => prev.filter(i => i.invitationId !== invitationId));
-  }, []);
+    await fetch();
+  }, [fetch]);
 
   const cancelInvitation = useCallback(async (invitationId) => {
-    return apiCancelInvitation(invitationId);
-  }, []);
+    const result = await apiCancelInvitation(invitationId);
+    await fetch();
+    return result;
+  }, [fetch]);
 
   const removeMember = useCallback(async (memberId) => {
     setError(null);
     try {
       await enqueueAndSync("household.removeMember", { memberId });
+      setTimeout(() => fetch(), 300);
     } catch (err) {
       setError(err.message ?? "Failed to remove member");
       throw err;
     }
-  }, []);
+  }, [fetch]);
 
   const leaveHousehold = useCallback(async () => {
     setError(null);
@@ -178,11 +193,12 @@ export function useHousehold(isAuthenticated) {
     setError(null);
     try {
       await enqueueAndSync("household.rename", { name });
+      setTimeout(() => fetch(), 300);
     } catch (err) {
       setError(err.message ?? "Failed to rename household");
       throw err;
     }
-  }, []);
+  }, [fetch]);
 
   return {
     household, pendingInvitations,

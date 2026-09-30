@@ -2,13 +2,10 @@ import { useState, useMemo } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from "react-native";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import { toApiNecessity, formatCurrency, isNecessary, isOptional } from "../../src/utils/enums.js";
-import { MONTH_SHORT, MONTH_LABELS } from "../../src/utils/theme.js";
+import { MONTH_LABELS } from "../../src/utils/theme.js";
 import { useMonthEntries } from "../../src/utils/useMonthEntries.js";
-
-const NECESSITY_STYLE = {
-  necessary: { bg: "#FAECE7", color: "#993C1D", label: "🔒 Necessary" },
-  optional:  { bg: "#FAEEDA", color: "#854F0B", label: "✂️ Optional"  },
-};
+import { currentYearMonth } from "../../src/utils/entries.js";
+import { MonthScroller } from "../../src/components/MonthScroller.jsx";
 
 const CACHE_PREFIX = "moni_entries_cache_";
 
@@ -16,15 +13,17 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
   const { colors: C, styles: S } = useTheme();
   const showHousehold = !!household && !showPersonalOnly;
 
-  // An entry can be modified by its author OR by the household owner.
-  const canModify = (entry) => {
-    if (!user) return false;
-    if (entry.userId === user.userId) return true;
-    if (showHousehold && user.householdRole === "OWNER") return true;
-    return false;
+  // Theme-aware necessity badge styles — defined inside the component so they
+  // use the current color tokens and respond correctly to dark/light mode.
+  const NECESSITY_STYLE = {
+    necessary: { bg: C.redLight,   color: C.redDark,   label: "🔒 Necessary" },
+    optional:  { bg: C.amberLight, color: C.amberDark, label: "✂️ Optional"  },
   };
 
-  const [filterMonth, setFilterMonth] = useState(() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; });
+  // Only the entry author can edit or delete their own entries.
+  const canModify = (entry) => !!(user && entry.userId === user.userId);
+
+  const [filterMonth, setFilterMonth] = useState(currentYearMonth);
   const [expandedId, setExpandedId]   = useState(null);
   const [search, setSearch]           = useState("");
   const [typeFilter, setTypeFilter]           = useState("all");
@@ -44,7 +43,7 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
     );
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(e => e.note?.toLowerCase().includes(q) || getCategoryById(e.categoryId).label.toLowerCase().includes(q));
+      list = list.filter(e => e.note?.toLowerCase().includes(q) || getCategoryById(e.categoryId)?.label?.toLowerCase()?.includes(q) === true);
     }
     return list;
   }, [rawEntries, typeFilter, necessityFilter, search, getCategoryById]);
@@ -85,28 +84,7 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
         <Text style={[S.h2, { marginBottom: 10 }]}>History</Text>
 
         {/* Month scroller */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-          <View style={[S.row, { gap: 6, paddingVertical: 2 }]}>
-            {monthsData.map(({ key, month, year }) => {
-              const isActive = key === filterMonth;
-              return (
-                <TouchableOpacity
-                  key={key}
-                  onPress={() => setFilterMonth(key)}
-                  style={{
-                    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
-                    backgroundColor: isActive ? C.green : C.cardBg,
-                    borderWidth: 0.5, borderColor: isActive ? C.green : C.border,
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: isActive ? "#fff" : C.text }}>
-                    {MONTH_SHORT[month]} {year}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </ScrollView>
+        <MonthScroller monthsData={monthsData} filterMonth={filterMonth} onSelect={setFilterMonth} compact style={{ marginBottom: 12 }} />
 
         {/* Search */}
         <View style={localStyles.searchRow}>
@@ -146,11 +124,11 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
             {typeFilter !== "investment" && ["all","necessary","optional"].map(n => (
               <TouchableOpacity key={n} onPress={() => setNecessityFilter(n)}
                 style={[localStyles.chip, necessityFilter === n && {
-                  backgroundColor: n === "necessary" ? C.redLight  : n === "optional" ? "#FAEEDA" : C.bgTertiary,
-                  borderColor:     n === "necessary" ? C.red       : n === "optional" ? C.amber   : C.borderMed,
+                  backgroundColor: n === "necessary" ? C.redLight  : n === "optional" ? C.amberLight : C.bgTertiary,
+                  borderColor:     n === "necessary" ? C.red       : n === "optional" ? C.amber      : C.borderMed,
                 }]}>
                 <Text style={[localStyles.chipText, necessityFilter === n && { fontWeight: "600",
-                  color: n === "necessary" ? C.redDark : n === "optional" ? "#854F0B" : C.text,
+                  color: n === "necessary" ? C.redDark : n === "optional" ? C.amberDark : C.text,
                 }]}>
                   {n === "all" ? "All types" : n === "necessary" ? "🔒 Necessary" : "✂️ Optional"}
                 </Text>
@@ -206,14 +184,18 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
                       </View>
                     )}
                     {pendingSync?.has(entry.entryId) && (
-                      <View style={{ paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, backgroundColor: "#FFF3CD", borderWidth: 0.5, borderColor: "#FAC775" }}>
-                        <Text style={{ fontSize: 9, color: "#854F0B", fontWeight: "600" }}>PENDING</Text>
+                      <View style={{ paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, backgroundColor: C.amberLight, borderWidth: 0.5, borderColor: C.amberBorder }}>
+                        <Text style={{ fontSize: 9, color: C.amberDark, fontWeight: "600" }}>PENDING</Text>
                       </View>
                     )}
                   </View>
                   <Text style={S.small}>
                     {cat.label} · {entry.date?.slice(5).replace("-","/")}
-                    {household && entry.authorName ? ` · ${entry.authorName}` : ""}
+                    {entry.authorName ? (
+                      <Text style={entry.userId !== user?.userId ? { fontWeight: "600", color: C.textSecondary } : {}}>
+                        {` · ${entry.authorName}`}
+                      </Text>
+                    ) : null}
                   </Text>
                 </View>
                 <Text style={[localStyles.amount, { color: entry.type === "income" ? C.green : entry.type === "investment" ? C.blue : C.red }]}>

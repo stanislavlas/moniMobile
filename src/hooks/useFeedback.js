@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { FLASH_DURATION_MS } from "../utils/constants.js";
 
 /**
@@ -10,11 +10,18 @@ import { FLASH_DURATION_MS } from "../utils/constants.js";
  */
 export function useFeedback(duration = FLASH_DURATION_MS) {
   const [feedback, setFeedback] = useState(null);
+  const timerRef = useRef(null);
+
+  // Clean up pending timer on unmount to prevent setState on unmounted component
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
 
   const flash = useCallback((ok, msg) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
     setFeedback({ ok, msg });
     if (ok) {
-      setTimeout(() => setFeedback(null), duration);
+      timerRef.current = setTimeout(() => { timerRef.current = null; setFeedback(null); }, duration);
     }
   }, [duration]);
 

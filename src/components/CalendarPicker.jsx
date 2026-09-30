@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useTheme } from "../contexts/ThemeContext.js";
 
@@ -19,6 +19,12 @@ export function CalendarPicker({ value, onChange, accentColor }) {
   const [pickerMonth, setPickerMonth] = useState(
     () => new Date((value || new Date().toISOString().slice(0, 10)) + "T00:00:00")
   );
+
+  // Sync pickerMonth when the value prop changes externally (e.g. parent resets
+  // the date after an add, or navigates to a different entry).
+  useEffect(() => {
+    if (value) setPickerMonth(new Date(value + "T00:00:00"));
+  }, [value]);
 
   const today = new Date().toISOString().slice(0, 10);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   ActivityIndicator, Keyboard, TouchableWithoutFeedback,
@@ -27,8 +27,23 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving]           = useState(false);
   const [flash, setFlash]             = useState(null);
+  const flashTimerRef                 = useRef(null);
+
+  // Clean up flash timer on unmount
+  useEffect(() => {
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
+  }, []);
 
   const cats = type === "income" ? incomeCategories : type === "investment" ? investmentCategories : expenseCategories;
+
+  // When categories finish loading, ensure the selected category is valid for
+  // the current type. On initial render categories may be empty (still loading),
+  // leaving category as "". This effect corrects that once they arrive.
+  useEffect(() => {
+    if (!category && cats.length > 0) {
+      setCategory(cats[0]?.id || cats[0]?.categoryId || "");
+    }
+  }, [cats, category]);
 
   function switchType(t) {
     setType(t);
@@ -53,7 +68,8 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
       });
       setAmount(""); setNote("");
       setFlash({ ok: true, msg: "✓ Saved" });
-      setTimeout(() => setFlash(null), 1800);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => { flashTimerRef.current = null; setFlash(null); }, 1800);
     } catch (e) {
       setFlash({ ok: false, msg: e?.message || "Failed to save" });
     } finally { setSaving(false); }

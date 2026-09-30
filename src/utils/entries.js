@@ -28,3 +28,11 @@ export function recentMonths(n = 3) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
 }
+
+/**
+ * Returns the current month as a "YYYY-MM" string.
+ * Computed once at module load time — suitable as a default state initializer.
+ * Use this instead of duplicating the inline computation everywhere.
+ */
+const _now = new Date();
+export const currentYearMonth = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;

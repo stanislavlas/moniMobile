@@ -9,7 +9,6 @@ import { logger } from "../utils/logger.js";
 import { getServerUrl } from "./serverUrl.js";
 import { authEvents } from "../utils/authEvents.js";
 
-logger.auth('Auth Service initialized');
 const KEY_ACCESS          = "moni_access_token";
 const KEY_REFRESH         = "moni_refresh_token";
 const KEY_USER            = "moni_user";
@@ -120,7 +119,6 @@ export async function register({ name, email, password, currency }) {
       signal: controller.signal
     });
 
-    clearTimeout(timeoutId);
     const data = await res.json();
 
     if (!res.ok) {
@@ -130,64 +128,105 @@ export async function register({ name, email, password, currency }) {
     logger.auth('Register success — pending verification');
     return data;
   } catch (error) {
-    clearTimeout(timeoutId);
     logger.error('auth', 'Register error: ' + error.name, error.message);
 
     if (error.name === 'AbortError') {
-      throw new Error('Connection timeout - cannot reach server at ' + await getServerUrl());
+      throw new Error('Connection timeout - cannot reach server at ' + API_BASE);
     }
 
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
 export async function verifyRegistration(code) {
   const API_BASE = await getServerUrl();
-  const res = await fetch(`${API_BASE}/api/auth/verify`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || "Verification failed");
-  await storeTokens(data);
-  return data.user;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+      signal: controller.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Verification failed");
+    await storeTokens(data);
+    return data.user;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Connection timeout - cannot reach server');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function resendVerificationCode(email) {
   const API_BASE = await getServerUrl();
-  const res = await fetch(`${API_BASE}/api/auth/resend`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || "Failed to resend code");
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/resend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+      signal: controller.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Failed to resend code");
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Connection timeout - cannot reach server');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function forgotPassword(email) {
   const API_BASE = await getServerUrl();
-  const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || "Failed to request password reset");
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+      signal: controller.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Failed to request password reset");
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Connection timeout - cannot reach server');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function resetPassword(code, newPassword) {
   const API_BASE = await getServerUrl();
-  const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, newPassword }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || "Failed to reset password");
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, newPassword }),
+      signal: controller.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Failed to reset password");
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Connection timeout - cannot reach server');
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function login({ email, password }) {
@@ -204,17 +243,17 @@ export async function login({ email, password }) {
       body: JSON.stringify({ email, password }),
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Login failed");
     await storeTokens(data);
     logger.auth('Login success');
     return data.user;
   } catch (error) {
-    clearTimeout(timeoutId);
     logger.error('auth', 'Login error: ' + error.name, error.message);
     if (error.name === 'AbortError') throw new Error('Cannot reach server. Please check your connection.');
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -308,6 +347,12 @@ export async function deleteAccount(password) {
   await authRequest("/api/auth/account", { method: "DELETE", body: JSON.stringify({ password }) });
   await clearTokens();
   await clearBiometricCredentials();
+  // Also clear the biometric-enabled flag so isBiometricEnabled() returns false
+  // after deletion — prevents a spurious Face ID / Touch ID prompt on the next render.
+  try {
+    const { disableBiometric } = await import("./biometric.js");
+    await disableBiometric();
+  } catch { /* non-critical */ }
 }
 
 export async function getProfile() {
@@ -353,7 +398,7 @@ export async function storeBiometricCredentials(email, password) {
       keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
     });
   } catch (error) {
-    logger.error('auth', 'Failed to store biometric credentials', error);
+    logger.error('auth', 'Failed to store biometric credentials', error.message);
     throw error;
   }
 }

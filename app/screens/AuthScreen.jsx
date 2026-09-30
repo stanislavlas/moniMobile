@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator } from "react-native";
 import { useTheme } from "../../src/contexts/ThemeContext.js";
 import { canUseBiometric } from "../../src/services/biometric.js";
 import { logger } from "../../src/utils/logger.js";
-import { getServerUrl, setServerUrl, DEFAULT_URL } from "../../src/services/serverUrl.js";
+import { DEFAULT_URL } from "../../src/services/serverUrl.js";
+import { useServerUrl } from "../../src/hooks/useServerUrl.js";
 import { CurrencyPicker } from "../../src/components/CurrencyPicker.jsx";
 import { PasswordInput } from "../../src/components/PasswordInput.jsx";
 import { FeedbackBanner } from "../../src/components/FeedbackBanner.jsx";
@@ -23,12 +24,16 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
   const [localLoading, setLocalLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [showServerUrl, setShowServerUrl] = useState(false);
-  const [serverUrlDraft, setServerUrlDraft] = useState("");
-  const [serverUrl, setServerUrlState] = useState("");
+  const { serverUrl, serverUrlDraft, setServerUrlDraft, saveServerUrl } = useServerUrl();
   const [currency, setCurrency]                     = useState("EUR");
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [otpCode, setOtpCode]     = useState("");
   const [resendFeedback, setResendFeedback] = useState(null); // { ok, msg } | null
+  const resendTimerRef = useRef(null);
+  // Clean up resend timer on unmount
+  useEffect(() => {
+    return () => { if (resendTimerRef.current) clearTimeout(resendTimerRef.current); };
+  }, []);
   // Forgot password state
   const [resetCode, setResetCode]       = useState("");
   const [newPassword, setNewPassword]   = useState("");
@@ -40,7 +45,6 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
 
   useEffect(() => {
     canUseBiometric().then(setBiometricAvailable);
-    getServerUrl().then(url => { setServerUrlState(url); setServerUrlDraft(url); });
   }, []);
 
   function switchMode(m) {
@@ -58,8 +62,7 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
       setLocalError("URL must start with http:// or https://");
       return;
     }
-    await setServerUrl(serverUrlDraft);
-    setServerUrlState(serverUrlDraft);
+    await saveServerUrl(serverUrlDraft);
     setShowServerUrl(false);
   }
 
@@ -164,7 +167,8 @@ export function AuthScreen({ onLogin, onRegister, loading, error, onClearError, 
               try {
                 await onResendRegistrationCode?.();
                 setResendFeedback({ ok: true, msg: "Code resent! Check with your administrator." });
-                setTimeout(() => setResendFeedback(null), 4000);
+                if (resendTimerRef.current) clearTimeout(resendTimerRef.current);
+                resendTimerRef.current = setTimeout(() => { resendTimerRef.current = null; setResendFeedback(null); }, 4000);
               } catch (err) { setLocalError(err.message); }
             }}
             style={{ marginTop: 16, alignItems: "center" }}

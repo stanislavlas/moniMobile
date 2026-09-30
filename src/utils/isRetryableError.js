@@ -7,6 +7,7 @@
  * Excluded: auth errors (401), client errors (other 4xx).
  */
 export function isRetryableError(error) {
+  if (!error) return false;
   if (error.status >= 500 && error.status <= 599) return true;
   if (error.status === 408 || error.status === 429) return true;
   const msg = error.message || "";

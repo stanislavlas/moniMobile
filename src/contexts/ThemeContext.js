@@ -42,7 +42,7 @@ export function ThemeProvider({ children }) {
 
   return (
     <ThemeContext.Provider value={{ isDark, toggleTheme, colors, styles, isLoaded }}>
-      {children}
+      {isLoaded ? children : null}
     </ThemeContext.Provider>
   );
 }

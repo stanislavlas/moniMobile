@@ -1,7 +1,7 @@
 import "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { useState, useEffect, useCallback } from "react";
-import { View, Text, Image, TouchableOpacity, StatusBar, ActivityIndicator, Modal, ToastAndroid } from "react-native";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { View, Text, Image, TouchableOpacity, StatusBar, ActivityIndicator, Modal } from "react-native";
 import { useAuth }         from "./src/hooks/useAuth.js";
 import { useEntries }      from "./src/hooks/useEntries.js";
 import { useHousehold }    from "./src/hooks/useHousehold.js";
@@ -11,6 +11,7 @@ import { ThemeProvider, useTheme } from "./src/contexts/ThemeContext.js";
 import { NetworkProvider } from "./src/contexts/NetworkContext.js";
 import { SyncIndicator }   from "./src/components/SyncIndicator.jsx";
 import { OfflineBanner }   from "./src/components/OfflineBanner.jsx";
+import { FeedbackBanner }  from "./src/components/FeedbackBanner.jsx";
 import { AuthScreen }        from "./app/screens/AuthScreen.jsx";
 import { MonthOverviewScreen } from "./app/screens/MonthOverviewScreen.jsx";
 import { YearOverviewScreen }  from "./app/screens/YearOverviewScreen.jsx";
@@ -19,6 +20,8 @@ import { AccountScreen }     from "./app/screens/AccountScreen.jsx";
 import { HistoryScreen }     from "./app/screens/HistoryScreen.jsx";
 import { authenticateWithBiometric } from "./src/services/biometric.js";
 import { applyNotificationPreferences } from "./src/services/notifications.js";
+import { logger } from "./src/utils/logger.js";
+import { currentYearMonth } from "./src/utils/entries.js";
 
 const TABS = [
   { id: "month",   label: "Month",   icon: "month" },
@@ -31,24 +34,31 @@ const TABS = [
 function AppContent() {
   const { isDark, colors: C, styles: S } = useTheme();
   const [appError, setAppError] = useState(null);
+  const [biometricFeedback, setBiometricFeedback] = useState(null);
+  const biometricFeedbackTimerRef = useRef(null);
 
-  // Global error handler
+  // Clean up biometric feedback timer on unmount
   useEffect(() => {
+    return () => { if (biometricFeedbackTimerRef.current) clearTimeout(biometricFeedbackTimerRef.current); };
+  }, []);
+
+  // Global error handler — use logger, restore previous handler on unmount
+  useEffect(() => {
+    if (!global.ErrorUtils) return;
+    const prev = global.ErrorUtils.getGlobalHandler?.();
     const errorHandler = (error, isFatal) => {
-      console.error("Global Error:", error, isFatal);
+      logger.error('ui', 'Global error', error?.message);
       setAppError(error?.message || String(error));
     };
-
-    if (global.ErrorUtils) {
-      global.ErrorUtils.setGlobalHandler(errorHandler);
-    }
+    global.ErrorUtils.setGlobalHandler(errorHandler);
+    return () => { if (prev) global.ErrorUtils.setGlobalHandler(prev); };
   }, []);
 
   const auth = useAuth();
   const { user, isAuthenticated, ready, loading: authLoading, error: authError, clearError, login, register, logout, deleteAccount, changePassword, updateProfile, loginWithBiometric, pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll, pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification } = auth;
 
   const [tab, setTab]               = useState("month");
-  const [filterMonth, setFilterMonth] = useState(() => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; });
+  const [filterMonth, setFilterMonth] = useState(currentYearMonth);
   const [showPersonalOnly, setShowPersonalOnly] = useState(false); // Toggle for personal vs household view
 
   const {
@@ -133,6 +143,7 @@ function AppContent() {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: StatusBar.currentHeight || 0 }}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={C.bg} translucent={false} />
+      <FeedbackBanner feedback={biometricFeedback} />
 
       {/* Biometric enrollment prompt — shown after login/register when device supports biometrics.
           Note: this uses authenticateWithBiometric directly (enrollment confirmation flow).
@@ -151,7 +162,9 @@ function AppContent() {
                   const ok = await authenticateWithBiometric();
                   if (ok) {
                     await confirmBiometricEnroll();
-                    ToastAndroid.show("Biometrics enabled", ToastAndroid.SHORT);
+                    if (biometricFeedbackTimerRef.current) clearTimeout(biometricFeedbackTimerRef.current);
+                    setBiometricFeedback({ ok: true, msg: "Biometrics enabled" });
+                    biometricFeedbackTimerRef.current = setTimeout(() => { biometricFeedbackTimerRef.current = null; setBiometricFeedback(null); }, 2500);
                   } else {
                     dismissBiometricEnroll();
                   }

@@ -72,7 +72,9 @@ export function useAuth() {
         await triggerBiometricLogin();
       }
     })();
-  }, []);
+  }, [triggerBiometricLogin]); // eslint-disable-line react-hooks/exhaustive-deps
+  // triggerBiometricLogin is stable (no deps in its useCallback) so this dep
+  // never changes in practice; listing it satisfies the exhaustive-deps rule.
 
   // Re-trigger biometric auto-login whenever the user is signed out (logout or session expiry)
   // but only after the initial rehydration is done (ready = true).
@@ -211,6 +213,7 @@ export function useAuth() {
 
   const cancelRegistrationVerification = useCallback(() => {
     setPendingRegistration(null);
+    setLoading(false);
     clearError();
   }, [clearError]);
 
@@ -245,6 +248,11 @@ export function useAuth() {
     try {
       await apiDeleteAccount(password);
       await clearEntriesCache();
+      await clearHouseholdCache();
+      // Block the auto biometric-login trigger that fires on user → null transition.
+      // deleteAccount clears biometric credentials so the prompt would immediately
+      // fail with a confusing "Biometric login is no longer set up" error.
+      biometricTriggeredRef.current = true;
       setUser(null);
     }
     catch (e) { setError(e.message); throw e; }
@@ -288,15 +296,10 @@ export function useAuth() {
     setPendingBiometricEnroll(null);
   }, []);
 
-  // Called by authRequest when a 401 slips through
-  const handleSessionExpired = useCallback(() => {
-    setUser(null);
-  }, []);
-
   return {
     user, isAuthenticated, ready, loading, error, clearError,
     login, register, logout, deleteAccount, changePassword, updateProfile,
-    handleSessionExpired, loginWithBiometric,
+    loginWithBiometric,
     pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll,
     pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification,
   };
