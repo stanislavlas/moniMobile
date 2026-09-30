@@ -11,7 +11,7 @@
  * @param {string}  cachePrefix   - AsyncStorage key prefix (e.g. "moni_dashboard_cache_")
  * @param {boolean} showHousehold - Whether to fetch household or personal data
  * @param {string}  filterMonth   - Currently selected YYYY-MM
- * @returns {{ monthsData, dashboardCache, fetchDashboard, hasMoreMonths, loadAllMonths }}
+ * @returns {{ monthsData, dashboardCache, fetchDashboard, hasMoreMonths, loadMoreMonths }}
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -23,6 +23,7 @@ import { logger } from "./logger.js";
 import { makeMonthItem, loadMonthCache, saveMonthCache, clearMonthCache } from "./monthCache.js";
 
 const INITIAL_MONTH_LIMIT = 12;
+const LOAD_MORE_STEP = 12;
 
 function lastDayOf(ym) {
   const [y, mo] = ym.split("-");
@@ -30,47 +31,41 @@ function lastDayOf(ym) {
 }
 
 export function useDashboard(cachePrefix, showHousehold, filterMonth) {
-  const [monthsData, setMonthsData] = useState(() =>
-    recentMonths(3).map(makeMonthItem)
-  );
+  const [allMonthKeys, setAllMonthKeys] = useState(() => recentMonths(3));
+  const [visibleCount, setVisibleCount] = useState(INITIAL_MONTH_LIMIT);
   const [dashboardCache, setDashboardCache] = useState({});
   const [hasMoreMonths, setHasMoreMonths] = useState(false);
   const fetchedMonths = useRef(new Set());
 
-  // Fetch distinct months from API; merge with recent window
+  // Derive the visible slice; map to MonthScroller items
+  const monthsData = allMonthKeys.slice(0, visibleCount).map(makeMonthItem);
+
+  // Fetch all months from API upfront; merge with recent window
   useEffect(() => {
     let cancelled = false;
-    listActiveMonths(showHousehold, INITIAL_MONTH_LIMIT)
+    listActiveMonths(showHousehold, 0)
       .then(data => {
         if (cancelled) return;
         const recent = new Set(recentMonths(3));
         const all = new Set([...(Array.isArray(data) ? data : []), ...recent]);
         const sorted = [...all].sort((a, b) => b.localeCompare(a));
         logger.info("dashboard", `activeMonths loaded: ${sorted.length} (household=${showHousehold})`);
-        setMonthsData(sorted.map(makeMonthItem));
-        setHasMoreMonths(Array.isArray(data) && data.length >= INITIAL_MONTH_LIMIT);
+        setAllMonthKeys(sorted);
+        setHasMoreMonths(sorted.length > INITIAL_MONTH_LIMIT);
       })
       .catch(() => { /* keep seed */ });
     return () => { cancelled = true; };
   }, [showHousehold]);
 
-  // Fetch ALL months — called when user taps "Show more"
-  const loadAllMonths = useCallback(() => {
-    listActiveMonths(showHousehold, 0)
-      .then(data => {
-        if (!Array.isArray(data)) return;
-        setMonthsData(prev => {
-          const existing = new Set(prev.map(m => m.key));
-          const extra = data.filter(k => !existing.has(k));
-          if (!extra.length) return prev;
-          return [...prev, ...extra.map(makeMonthItem)]
-            .sort((a, b) => b.key.localeCompare(a.key));
-        });
-        setHasMoreMonths(false);
-        logger.info("dashboard", `loadAllMonths: ${data.length} months total`);
-      })
-      .catch(e => logger.warn("dashboard", "loadAllMonths failed", e?.message));
-  }, [showHousehold]);
+  // Reveal next batch — no API call needed
+  const loadMoreMonths = useCallback(() => {
+    setVisibleCount(prev => {
+      const next = prev + LOAD_MORE_STEP;
+      setHasMoreMonths(next < allMonthKeys.length);
+      return next;
+    });
+    logger.info("dashboard", `loadMoreMonths: revealing next ${LOAD_MORE_STEP}`);
+  }, [allMonthKeys.length]);
 
   // Fetch dashboard for a single month on demand — AsyncStorage cache-first
   const fetchDashboard = useCallback(async (ym) => {
@@ -109,7 +104,8 @@ export function useDashboard(cachePrefix, showHousehold, filterMonth) {
   useEffect(() => {
     logger.info("dashboard", `household toggle (${showHousehold}) — resetting dashboard cache`);
     setDashboardCache({});
-    setMonthsData(recentMonths(3).map(makeMonthItem));
+    setAllMonthKeys(recentMonths(3));
+    setVisibleCount(INITIAL_MONTH_LIMIT);
     setHasMoreMonths(false);
     fetchedMonths.current = new Set();
     fetchDashboard(filterMonth);
@@ -133,15 +129,15 @@ export function useDashboard(cachePrefix, showHousehold, filterMonth) {
         delete next[ym];
         return next;
       });
-      setMonthsData(prev => {
-        if (prev.some(m => m.key === ym)) return prev;
-        return [...prev, makeMonthItem(ym)].sort((a, b) => b.key.localeCompare(a.key));
+      setAllMonthKeys(prev => {
+        if (prev.includes(ym)) return prev;
+        return [...prev, ym].sort((a, b) => b.localeCompare(a));
       });
       // Re-fetch the invalidated month immediately
       fetchDashboard(ym);
     });
   }, [cachePrefix, fetchDashboard]);
 
-  return { monthsData, dashboardCache, fetchDashboard, hasMoreMonths, loadAllMonths };
+  return { monthsData, dashboardCache, fetchDashboard, hasMoreMonths, loadMoreMonths };
 }
 
