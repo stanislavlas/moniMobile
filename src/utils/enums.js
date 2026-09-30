@@ -48,8 +48,8 @@ export function toApiNecessity(uiNecessity) {
  * that may still be present in locally-cached entries.
  */
 export function fromApiNecessity(apiNecessity) {
-  if (apiNecessity === "OPTIONAL" || apiNecessity === "WANT") return "optional";
-  return "necessary"; // covers NECESSARY, NEED, and any unknown value
+  if (apiNecessity === "OPTIONAL" || apiNecessity === "WANT" || apiNecessity === "optional") return "optional";
+  return "necessary"; // covers NECESSARY, NEED, lowercase "necessary", and any unknown value
 }
 
 /** Returns true when an entry's necessity is "necessary" (handles both API and UI values). */

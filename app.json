@@ -2,7 +2,7 @@
   "expo": {
     "name": "Moni",
     "slug": "budget",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -16,7 +16,7 @@
         "color": "#1D9E75"
       },
       "package": "com.stanislavlas.moni",
-      "versionCode": 6,
+      "versionCode": 7,
       "kotlinVersion": "2.0.21"
     },
     "platforms": [
