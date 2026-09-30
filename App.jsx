@@ -206,7 +206,7 @@ function AppContent() {
 
         {/* Right side - View toggle, sync indicator and loading indicator */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          {household && (
+          {!!user?.householdId && (
             <TouchableOpacity
               onPress={() => setShowPersonalOnly(!showPersonalOnly)}
               style={{
