@@ -9,6 +9,33 @@ import { MonthScroller } from "../../src/components/MonthScroller.jsx";
 
 const CACHE_PREFIX = "moni_entries_cache_";
 
+// Deterministic per-user color palette derived from userId.
+const USER_PALETTES = [
+  { light: "#ede9fe", border: "#8b5cf6", text: "#5b21b6" },  // violet
+  { light: "#fce7f3", border: "#ec4899", text: "#9d174d" },  // pink
+  { light: "#ccfbf1", border: "#14b8a6", text: "#0f766e" },  // teal
+  { light: "#ffedd5", border: "#f97316", text: "#9a3412" },  // orange
+  { light: "#cffafe", border: "#06b6d4", text: "#155e75" },  // cyan
+  { light: "#ecfccb", border: "#84cc16", text: "#3f6212" },  // lime
+];
+
+function hashUserId(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  return Math.abs(h) % USER_PALETTES.length;
+}
+
+function userPalette(userId) {
+  return USER_PALETTES[hashUserId(userId)];
+}
+
+// Toggle a value in/out of a Set, returning a new Set.
+function toggle(set, value) {
+  const next = new Set(set);
+  next.has(value) ? next.delete(value) : next.add(value);
+  return next;
+}
+
 export function HistoryScreen({ user, onDelete, onUpdate, household, showPersonalOnly, incomeCategories, expenseCategories, investmentCategories, allCategories, colorMap, getCategoryById, pendingSync }) {
   const { colors: C, styles: S } = useTheme();
   const showHousehold = !!household && !showPersonalOnly;
@@ -26,8 +53,10 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
   const [filterMonth, setFilterMonth] = useState(currentYearMonth);
   const [expandedId, setExpandedId]   = useState(null);
   const [search, setSearch]           = useState("");
-  const [typeFilter, setTypeFilter]           = useState("all");
-  const [necessityFilter, setNecessityFilter] = useState("all");
+  // Sets of active values — empty means "show all"
+  const [typeFilters, setTypeFilters]           = useState(new Set());
+  const [necessityFilters, setNecessityFilters] = useState(new Set());
+  const [userFilters, setUserFilters]           = useState(new Set());
 
   const { monthsData, monthCache, hasMoreMonths, loadMoreMonths } = useMonthEntries(CACHE_PREFIX, showHousehold, filterMonth);
 
@@ -37,16 +66,32 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
 
   const filtered = useMemo(() => {
     let list = rawEntries;
-    if (typeFilter !== "all")      list = list.filter(e => e.type === typeFilter);
-    if (necessityFilter !== "all") list = list.filter(e =>
-      necessityFilter === "necessary" ? isNecessary(e) : isOptional(e)
+    if (typeFilters.size      > 0) list = list.filter(e => typeFilters.has(e.type));
+    if (necessityFilters.size > 0) list = list.filter(e =>
+      (necessityFilters.has("necessary") && isNecessary(e)) ||
+      (necessityFilters.has("optional")  && isOptional(e))
     );
+    if (userFilters.size > 0) list = list.filter(e => userFilters.has(e.userId));
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(e => e.note?.toLowerCase().includes(q) || getCategoryById(e.categoryId)?.label?.toLowerCase()?.includes(q) === true);
     }
     return list;
-  }, [rawEntries, typeFilter, necessityFilter, search, getCategoryById]);
+  }, [rawEntries, typeFilters, necessityFilters, userFilters, search, getCategoryById]);
+
+  // Unique authors present in the current month — only useful in household mode.
+  const authors = useMemo(() => {
+    const seen = new Map();
+    for (const e of rawEntries) {
+      if (e.userId && !seen.has(e.userId)) seen.set(e.userId, e.authorName || e.userId);
+    }
+    return Array.from(seen.entries()).map(([userId, name]) => ({ userId, name }));
+  }, [rawEntries]);
+
+  const hasFilters = typeFilters.size > 0 || necessityFilters.size > 0 || userFilters.size > 0 || search.trim();
+
+  // Whether necessity filter row should be visible (hidden when only investment is selected)
+  const onlyInvestment = typeFilters.size > 0 && [...typeFilters].every(t => t === "investment");
 
   function confirmDelete(entryId, note) {
     const entry = rawEntries.find(e => e.entryId === entryId);
@@ -101,41 +146,78 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
           ) : null}
         </View>
 
-        {/* Filters row */}
+        {/* Type filter row — each chip is an independent toggle */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
           <View style={[S.row, { gap: 6, paddingBottom: 4 }]}>
-            {["all","income","expense","investment"].map(t => (
-              <TouchableOpacity key={t} onPress={() => setTypeFilter(t)}
-                style={[localStyles.chip, typeFilter === t && {
-                  backgroundColor: t === "income" ? C.greenLight : t === "expense" ? C.redLight : t === "investment" ? C.blueLight : C.bgTertiary,
-                  borderColor:     t === "income" ? C.green      : t === "expense" ? C.red      : t === "investment" ? C.blue      : C.borderMed,
-                }]}>
-                <Text style={[localStyles.chipText, typeFilter === t && {
-                  fontWeight: "600",
-                  color: t === "income" ? C.greenDark : t === "expense" ? C.redDark : t === "investment" ? C.blueDark : C.text,
-                }]}>
-                  {t === "all" ? "All" : t === "income" ? "💰 Income" : t === "expense" ? "💸 Expenses" : "📈 Investments"}
-                </Text>
-              </TouchableOpacity>
-            ))}
-
-            <View style={{ width: 0.5, backgroundColor: C.border, marginHorizontal: 4 }} />
-
-            {typeFilter !== "investment" && ["all","necessary","optional"].map(n => (
-              <TouchableOpacity key={n} onPress={() => setNecessityFilter(n)}
-                style={[localStyles.chip, necessityFilter === n && {
-                  backgroundColor: n === "necessary" ? C.redLight  : n === "optional" ? C.amberLight : C.bgTertiary,
-                  borderColor:     n === "necessary" ? C.red       : n === "optional" ? C.amber      : C.borderMed,
-                }]}>
-                <Text style={[localStyles.chipText, necessityFilter === n && { fontWeight: "600",
-                  color: n === "necessary" ? C.redDark : n === "optional" ? C.amberDark : C.text,
-                }]}>
-                  {n === "all" ? "All types" : n === "necessary" ? "🔒 Necessary" : "✂️ Optional"}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {[
+              { value: "income",     label: "💰 Income",      activeBg: C.greenLight, activeBorder: C.green,     activeText: C.greenDark },
+              { value: "expense",    label: "💸 Expenses",    activeBg: C.redLight,   activeBorder: C.red,       activeText: C.redDark   },
+              { value: "investment", label: "📈 Investments", activeBg: C.blueLight,  activeBorder: C.blue,      activeText: C.blueDark  },
+            ].map(({ value, label, activeBg, activeBorder, activeText }) => {
+              const on = typeFilters.has(value);
+              return (
+                <TouchableOpacity key={value}
+                  onPress={() => {
+                    setTypeFilters(t => toggle(t, value));
+                    if (value === "investment") setNecessityFilters(new Set());
+                  }}
+                  style={[localStyles.chip, on && { backgroundColor: activeBg, borderColor: activeBorder }]}
+                >
+                  <Text style={[localStyles.chipText, on && { fontWeight: "600", color: activeText }]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </ScrollView>
+
+        {/* Necessity filter row */}
+        {!onlyInvestment && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+            <View style={[S.row, { gap: 6, paddingBottom: 4 }]}>
+              {[
+                { value: "necessary", label: "🔒 Necessary", activeBg: C.redLight,   activeBorder: C.red,   activeText: C.redDark   },
+                { value: "optional",  label: "✂️ Optional",  activeBg: C.amberLight, activeBorder: C.amber, activeText: C.amberDark },
+              ].map(({ value, label, activeBg, activeBorder, activeText }) => {
+                const on = necessityFilters.has(value);
+                return (
+                  <TouchableOpacity key={value}
+                    onPress={() => setNecessityFilters(n => toggle(n, value))}
+                    style={[localStyles.chip, on && { backgroundColor: activeBg, borderColor: activeBorder }]}
+                  >
+                    <Text style={[localStyles.chipText, on && { fontWeight: "600", color: activeText }]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+        )}
+
+        {/* Member filter row — only shown when multiple authors are present in this month */}
+        {authors.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+            <View style={[S.row, { gap: 6, paddingBottom: 4 }]}>
+              {authors.map(({ userId, name }) => {
+                const p  = userPalette(userId);
+                const on = userFilters.has(userId);
+                return (
+                  <TouchableOpacity
+                    key={userId}
+                    onPress={() => setUserFilters(u => toggle(u, userId))}
+                    style={[localStyles.chip, on && { backgroundColor: p.light, borderColor: p.border }]}
+                  >
+                    <Text style={[localStyles.chipText, on && { fontWeight: "600", color: p.text }]}>
+                      {userId === user?.userId ? `${name} (you)` : name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+        )}
 
         <View style={[S.divider, { marginTop: 10, marginBottom: 4 }]} />
         <Text style={[S.small, { paddingVertical: 6 }]}>
@@ -151,7 +233,7 @@ export function HistoryScreen({ user, onDelete, onUpdate, household, showPersona
           </View>
         ) : filtered.length === 0 ? (
           <Text style={[S.small, { textAlign: "center", paddingVertical: 48 }]}>
-            {search || typeFilter !== "all" || necessityFilter !== "all"
+            {hasFilters
               ? "No matching transactions"
               : `No transactions in ${selectedMonthLabel}`}
           </Text>
