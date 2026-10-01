@@ -280,6 +280,19 @@ export function useAuth() {
     }
   }, []);
 
+  // Re-fetch the user profile from the server and update local state + AsyncStorage.
+  // Call this after household membership changes (create, join, leave, delete) so that
+  // user.householdId is up to date and household-gated UI (e.g. the toggle) appears immediately.
+  const refreshProfile = useCallback(async () => {
+    try {
+      const fresh = await apiGetProfile();
+      setUser(fresh);
+      return fresh;
+    } catch {
+      // Non-critical — ignore failures silently
+    }
+  }, []);
+
   // Confirm biometric enrollment from the UI prompt
   const confirmBiometricEnroll = useCallback(async () => {
     if (!pendingBiometricEnroll) return;
@@ -298,7 +311,7 @@ export function useAuth() {
 
   return {
     user, isAuthenticated, ready, loading, error, clearError,
-    login, register, logout, deleteAccount, changePassword, updateProfile,
+    login, register, logout, deleteAccount, changePassword, updateProfile, refreshProfile,
     loginWithBiometric,
     pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll,
     pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification,

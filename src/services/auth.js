@@ -357,11 +357,10 @@ export async function deleteAccount(password) {
 
 export async function getProfile() {
   const data = await authRequest("/api/user");
-  // Merge and persist to AsyncStorage
-  const existing = await getStoredUser();
-  const updated = { ...existing, ...data };
-  await AsyncStorage.setItem(KEY_USER, JSON.stringify(updated));
-  return updated;
+  // Use server response directly (full GET) — do not merge with AsyncStorage,
+  // which would preserve fields the server has since removed (e.g. householdId).
+  await AsyncStorage.setItem(KEY_USER, JSON.stringify(data));
+  return data;
 }
 
 export async function updateProfile(patch) {

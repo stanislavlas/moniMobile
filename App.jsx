@@ -7,6 +7,7 @@ import { useEntries }      from "./src/hooks/useEntries.js";
 import { useHousehold }    from "./src/hooks/useHousehold.js";
 import { useCategories }   from "./src/hooks/useCategories.js";
 import { useCurrencies }   from "./src/hooks/useCurrencies.js";
+import syncService         from "./src/services/syncService.js";
 import { ThemeProvider, useTheme } from "./src/contexts/ThemeContext.js";
 import { NetworkProvider } from "./src/contexts/NetworkContext.js";
 import { SyncIndicator }   from "./src/components/SyncIndicator.jsx";
@@ -55,7 +56,7 @@ function AppContent() {
   }, []);
 
   const auth = useAuth();
-  const { user, isAuthenticated, ready, loading: authLoading, error: authError, clearError, login, register, logout, deleteAccount, changePassword, updateProfile, loginWithBiometric, pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll, pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification } = auth;
+  const { user, isAuthenticated, ready, loading: authLoading, error: authError, clearError, login, register, logout, deleteAccount, changePassword, updateProfile, refreshProfile, loginWithBiometric, pendingBiometricEnroll, confirmBiometricEnroll, dismissBiometricEnroll, pendingRegistration, verifyRegistration, resendRegistrationCode, cancelRegistrationVerification } = auth;
 
   const [tab, setTab]               = useState("month");
   const [filterMonth, setFilterMonth] = useState(currentYearMonth);
@@ -67,9 +68,20 @@ function AppContent() {
     createHousehold, sendInvitation, acceptInvitation, rejectInvitation, cancelInvitation,
     removeMember, leaveHousehold, deleteHousehold, renameHousehold,
   } = useHousehold(isAuthenticated);
-  // Prefer householdId from the user object (available immediately on rehydration) with
-  // the full household object as fallback once it loads from the server.
-  const householdId = user?.householdId || household?.householdId || null;
+
+  // Refresh user profile after any household membership change so that user.householdId
+  // reflects the new state immediately and the toggle appears/disappears without a relog.
+  useEffect(() => {
+    const handler = ({ syncedOperations = [] }) => {
+      if (syncedOperations.some(op => op.type?.startsWith('household.'))) {
+        refreshProfile();
+      }
+    };
+    syncService.addEventListener('syncComplete', handler);
+    return () => syncService.removeEventListener('syncComplete', handler);
+  }, [refreshProfile]);
+
+  const householdId = user?.householdId || null;
 
   // Reset to default tab on logout
   useEffect(() => {
