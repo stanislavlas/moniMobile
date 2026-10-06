@@ -299,11 +299,7 @@ function AppContent() {
             onLeave={leaveHousehold}
             onDeleteHousehold={deleteHousehold}
             onRename={renameHousehold}
-
             onUpdateProfile={handleUpdateProfile}
-            currencyList={currencyList}
-            currenciesLoading={currenciesLoading}
-            onCurrencyPickerOpen={loadCurrencies}
           />
         )}
       </View>
