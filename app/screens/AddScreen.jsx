@@ -23,7 +23,7 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
   const [category, setCategory]       = useState(() => expenseCategories[0]?.id || expenseCategories[0]?.categoryId || "");
   const [necessity, setNecessity]     = useState("necessary");
   const [note, setNote]               = useState("");
-  const [date, setDate]               = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate]               = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving]           = useState(false);
   const [flash, setFlash]             = useState(null);
@@ -52,7 +52,7 @@ export function AddScreen({ onAdd, authorName, currency = "EUR", currencyList = 
   }
 
   async function handleSubmit() {
-    const amt = parseFloat(amount.replace(",", "."));
+    const amt = parseFloat(amount.replace(/,/g, "."));
     if (!amt || amt <= 0) { setFlash({ ok: false, msg: "Enter a valid amount" }); return; }
     if (!category) { setFlash({ ok: false, msg: "Please select a category" }); return; }
     setSaving(true);
